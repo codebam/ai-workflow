@@ -215,7 +215,7 @@ const fetchTool = {
 		},
 		required: ['url']
 	},
-	run: async ({
+	function: async ({
 		url,
 		method,
 		headers,
