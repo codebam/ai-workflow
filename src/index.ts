@@ -261,17 +261,7 @@ async function streamAiResponseToTelegram(
 	let messageId: number | undefined;
 	let buffer = '';
 
-	if (bot.update_type !== 'guest_message') {
-		const res = await bot.reply('<i>Thinking...</i>', 'HTML');
-		if (res && res.status === 200) {
-			const json = (await res.json()) as any;
-			if (json.ok && json.result?.message_id) {
-				messageId = json.result.message_id;
-			}
-		}
-	} else {
-		await bot.sendTyping();
-	}
+	await bot.sendTyping();
 
 	for (;;) {
 		const { done, value } = await reader.read();
@@ -296,7 +286,17 @@ async function streamAiResponseToTelegram(
 
 					if (content) {
 						streamContent += content;
-						if (messageId && Date.now() - lastUpdate > 1500) {
+
+						if (!messageId && streamContent.trim() && bot.update_type !== 'guest_message') {
+							const res = await bot.reply(await markdownToHtml(streamContent), 'HTML');
+							if (res && res.status === 200) {
+								const json = (await res.json()) as any;
+								if (json.ok && json.result?.message_id) {
+									messageId = json.result.message_id;
+									lastUpdate = Date.now();
+								}
+							}
+						} else if (messageId && Date.now() - lastUpdate > 1500) {
 							try {
 								await bot.api.editMessageText(bot.bot.api.toString(), {
 									chat_id: bot.chatId,
