@@ -173,10 +173,11 @@ async function streamAiResponse(bot, env, model, messages, task) {
                 })),
             }, { gateway: { id: 'default' } }));
             const toolCalls = response.tool_calls || response.choices?.[0]?.message?.tool_calls;
+            const content = response.response || response.choices?.[0]?.message?.content || '';
             if (toolCalls && toolCalls.length > 0) {
                 currentMessages.push({
                     role: 'assistant',
-                    content: response.choices?.[0]?.message?.content || null,
+                    content: content || null,
                     tool_calls: toolCalls,
                 });
                 for (const toolCall of toolCalls) {
@@ -212,8 +213,47 @@ async function streamAiResponse(bot, env, model, messages, task) {
                     }
                 }
             }
+            else if (content.includes('<|tool_call|>')) {
+                currentMessages.push({
+                    role: 'assistant',
+                    content: content,
+                });
+                const toolCallMatch = /<\|tool_call\|>call:([a-zA-Z0-9_]+)\{(.*?)\}<tool_call\|>/.exec(content);
+                if (toolCallMatch) {
+                    const name = toolCallMatch[1];
+                    const argsString = `{${toolCallMatch[2]}}`.replace(/<\|"\|>/g, '"');
+                    let args = {};
+                    try {
+                        args = JSON.parse(argsString);
+                    }
+                    catch (e) {
+                        console.error('Error parsing tool call arguments:', e);
+                    }
+                    const toolDef = tools.find((t) => t.name === name);
+                    if (toolDef && toolDef.run) {
+                        try {
+                            const result = await toolDef.run(args);
+                            currentMessages.push({
+                                role: 'tool',
+                                name: name,
+                                content: typeof result === 'string' ? result : JSON.stringify(result),
+                            });
+                        }
+                        catch (e) {
+                            currentMessages.push({
+                                role: 'tool',
+                                name: name,
+                                content: `Error executing tool: ${String(e)}`,
+                            });
+                        }
+                    }
+                }
+                else {
+                    break;
+                }
+            }
             else {
-                fullResponse = response.response || response.choices?.[0]?.message?.content || '';
+                fullResponse = content;
                 break;
             }
         }
