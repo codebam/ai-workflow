@@ -229,10 +229,14 @@ const fetchTool = {
 		try {
 			const res = await fetch(url, {
 				method: method || 'GET',
-				headers: headers || {},
+				headers: {
+					'User-Agent': 'Mozilla/5.0 (Cloudflare Worker Telegram Bot)',
+					...headers
+				},
 				body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
 			});
-			return await res.text();
+			const text = await res.text();
+			return text.slice(0, 10000);
 		} catch (e) {
 			return `Error executing fetch: ${String(e)}`;
 		}
@@ -251,7 +255,7 @@ async function streamAiResponseToTelegram(
 		model as any,
 		{
 			messages: messages as any,
-			tools: task.type === 'tool_call' ? [fetchTool] : []
+			tools: (task.type === 'tool_call' || (task.tools && task.tools.length > 0)) ? [fetchTool] : []
 		},
 		{
 			streamFinalResponse: true
@@ -368,7 +372,7 @@ export default {
 						modelId as any,
 						{
 							messages: messages as any,
-							tools: task.type === 'tool_call' ? [fetchTool] : []
+							tools: (task.type === 'tool_call' || (task.tools && task.tools.length > 0)) ? [fetchTool] : []
 						},
 						{
 							streamFinalResponse: true
