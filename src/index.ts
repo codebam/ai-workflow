@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { TelegramBot, TelegramExecutionContext } from '@codebam/cf-workers-telegram-bot';
-import { runWithTools } from '@cloudflare/ai-utils';
 import { marked } from 'marked';
 
 export interface Task {
@@ -204,7 +203,7 @@ async function markdownToHtml(s: string): Promise<string> {
 const fetchTool = {
 	name: 'fetch',
 	description:
-		'Perform an HTTP request to any API. Use this to get information from the internet.',
+		'Make an HTTP request to fetch a website or API, returning the HTML or JSON. You MUST use this tool when the user asks to fetch a URL, visit a website, or make a GET request, instead of writing code.',
 	parameters: {
 		type: 'object',
 		properties: {
@@ -243,6 +242,59 @@ const fetchTool = {
 	}
 };
 
+async function customRunWithTools(ai: any, model: string, input: any, config: any) {
+	const messages = [...input.messages];
+	const tools = input.tools || [];
+
+	const cfTools = tools.map((t: any) => ({
+		name: t.name,
+		description: t.description,
+		parameters: t.parameters
+	}));
+
+	if (cfTools.length === 0) {
+		return await ai.run(model, {
+			messages,
+			stream: config.streamFinalResponse
+		});
+	}
+
+	const response = await ai.run(model, {
+		messages,
+		tools: cfTools,
+		stream: false
+	}) as any;
+
+	if (response && response.tool_calls && response.tool_calls.length > 0) {
+		for (const call of response.tool_calls) {
+			const tool = tools.find((t: any) => t.name === call.name);
+			if (tool && tool.function) {
+				messages.push({ role: 'assistant', content: JSON.stringify(call) });
+				try {
+					const result = await tool.function(call.arguments);
+					messages.push({ role: 'tool', name: call.name, content: String(result) });
+				} catch (e) {
+					messages.push({ role: 'tool', name: call.name, content: String(e) });
+				}
+			}
+		}
+		
+		return await ai.run(model, {
+			messages,
+			stream: config.streamFinalResponse
+		});
+	}
+
+	if (config.streamFinalResponse) {
+		return await ai.run(model, {
+			messages,
+			stream: true
+		});
+	}
+
+	return response;
+}
+
 async function streamAiResponseToTelegram(
 	bot: TelegramExecutionContext,
 	env: Env,
@@ -250,7 +302,7 @@ async function streamAiResponseToTelegram(
 	messages: any[],
 	task: Task
 ): Promise<string> {
-	const aiResponse = await runWithTools(
+	const aiResponse = await customRunWithTools(
 		env.AI as any,
 		model as any,
 		{
@@ -367,7 +419,7 @@ export default {
 
 					const modelId = task.modelId || '@cf/meta/llama-3.1-8b-instruct-fp8';
 
-					const aiResponse = await runWithTools(
+					const aiResponse = await customRunWithTools(
 						env.AI as any,
 						modelId as any,
 						{
