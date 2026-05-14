@@ -196,7 +196,53 @@ async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: 
 				{ gateway: { id: 'default' } },
 			)) as any;
 
-			const toolCalls = response.tool_calls || response.choices?.[0]?.message?.tool_calls;
+			let toolCalls = response.tool_calls || response.choices?.[0]?.message?.tool_calls;
+
+			// Fallback: Check for raw tags in the response content
+			const content = response.response || response.choices?.[0]?.message?.content || '';
+			if ((!toolCalls || toolCalls.length === 0) && content.includes('<|tool_call>')) {
+				const regex = /<\|tool_call>call:([a-zA-Z0-9_.]+)(?:\((.*?)\)|\{(.*?)\})<tool_call\|>/g;
+				const matches = [...content.matchAll(regex)];
+				if (matches.length > 0) {
+					toolCalls = matches.map(m => {
+						const name = m[1].replace(/[^a-zA-Z0-9_]/g, '_');
+						let argString = m[2] || m[3] || '{}';
+						
+						// Handle specific weird format <|"|>
+						argString = argString.replace(/<\|"\|>/g, '"');
+						
+						let args = {};
+						try {
+							// Try parsing as JSON or a simple key=val list
+							if (argString.trim().startsWith('{')) {
+								args = JSON.parse(argString);
+							} else if (argString.includes('=')) {
+								const pairs = argString.split(/,\s*/);
+								for (const pair of pairs) {
+									const [key, val] = pair.split('=').map((s: string) => s.trim());
+									if (key && val) {
+										(args as any)[key] = val.replace(/^['"]|['"]$/g, '');
+										if (!isNaN(Number((args as any)[key]))) {
+											(args as any)[key] = Number((args as any)[key]);
+										}
+									}
+								}
+							} else {
+								// Attempt parsing wrapped in {}
+								args = JSON.parse(`{${argString}}`);
+							}
+						} catch (e) {
+							console.error('Error parsing fallback tool arguments:', e);
+						}
+						return {
+							id: `fallback-${crypto.randomUUID()}`,
+							name,
+							function: { name, arguments: args },
+							arguments: args
+						};
+					});
+				}
+			}
 
 			if (toolCalls && toolCalls.length > 0) {
 				currentMessages.push({
