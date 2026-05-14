@@ -246,7 +246,6 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	const messages = [...input.messages];
 	const tools = input.tools || [];
 
-	// 1. RESTORED: Cloudflare API requires the strict OpenAI format wrapper
 	const cfTools = tools.map((t: any) => ({
 		type: 'function',
 		function: {
@@ -270,61 +269,34 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	}) as any;
 
 	if (response && response.tool_calls && response.tool_calls.length > 0) {
-		// 2. FIX: Normalize the tool calls to prevent 500 Schema Errors
-		// Cloudflare sometimes returns arguments as an object or omits the ID. 
-		// We MUST ensure it matches the strict OpenAI format for the history array.
-		const normalizedToolCalls = response.tool_calls.map((call: any, index: number) => {
-			const name = call.name || (call.function && call.function.name);
-			let args = call.arguments || (call.function && call.function.arguments);
-			
-			// History expects arguments to be a JSON string, not a raw object
-			if (typeof args !== 'string') {
-				try { args = JSON.stringify(args); } catch(e) { args = '{}'; }
-			}
-			
-			return {
-				// Generate a fallback ID if Cloudflare omitted it, required to map the tool response
-				id: call.id || `call_${Math.random().toString(36).substring(2, 9)}_${index}`,
-				type: 'function',
-				function: {
-					name: name,
-					arguments: args
-				}
-			};
-		});
-
-		// Push the normalized assistant intent to history
-		messages.push({ 
-			role: 'assistant', 
-			content: response.response || '', 
-			tool_calls: normalizedToolCalls 
-		});
+		messages.push({ role: 'assistant', content: response.response || '', tool_calls: response.tool_calls });
 		
-		for (const call of normalizedToolCalls) {
-			const toolName = call.function.name;
-			const toolId = call.id; // Now guaranteed to exist
-			const toolArgsString = call.function.arguments;
+		for (const call of response.tool_calls) {
+			// Safely extract from Cloudflare's nested format
+			const toolName = call.name || (call.function && call.function.name);
+			let toolArgs = call.arguments || (call.function && call.function.arguments);
 			
 			const tool = tools.find((t: any) => t.name === toolName);
 			
 			if (tool && tool.function) {
 				try {
-					const parsedArgs = JSON.parse(toolArgsString);
+					let parsedArgs = toolArgs;
+					if (typeof parsedArgs === 'string') {
+						try { parsedArgs = JSON.parse(parsedArgs); } catch(e) { /* ignore */ }
+					}
 					const result = await tool.function(parsedArgs);
-					// Push the tool result, properly linked by ID
-					messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: String(result) });
+					// STRICT FORMAT: Cloudflare 500s if you include an ID here
+					messages.push({ role: 'tool', name: toolName, content: String(result) });
 				} catch (e) {
-					messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: String(e) });
+					messages.push({ role: 'tool', name: toolName, content: String(e) });
 				}
 			} else {
-				messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: 'Tool not found' });
+				messages.push({ role: 'tool', name: toolName || 'unknown', content: 'Tool not found' });
 			}
 		}
 		
-		// 3. Run the final inference with the perfectly formatted history
 		return await ai.run(model, {
 			messages,
-			tools: cfTools,
 			stream: config.streamFinalResponse
 		});
 	}
