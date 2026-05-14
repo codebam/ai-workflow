@@ -10,6 +10,8 @@ export interface Task {
 	businessConnectionId?: string;
 	prompt: string;
 	userId?: number;
+	senderId?: number;
+	chatId?: string;
 	threadId?: number;
 	history?: { role: string; content: string }[];
 	modelId?: string;
@@ -35,11 +37,14 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 			update_id: 0
 		};
 
+		const chatId = task.chatId ? parseInt(task.chatId) : (task.userId || 0);
+		const senderId = task.senderId || task.userId || 0;
+
 		if (task.updateType === 'guest_message') {
 			dummyUpdate.guest_message = {
 				message_id: 0,
-				from: { id: task.userId || 0, is_bot: false, first_name: 'User' },
-				chat: { id: task.userId || 0, type: 'private' },
+				from: { id: senderId, is_bot: false, first_name: 'User' },
+				chat: { id: chatId, type: 'private' },
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
 				guest_query_id: task.guestQueryId
@@ -47,8 +52,8 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		} else if (task.updateType === 'business_message') {
 			dummyUpdate.business_message = {
 				message_id: 0,
-				from: { id: task.userId || 0, is_bot: false, first_name: 'User' },
-				chat: { id: task.userId || 0, type: 'private' },
+				from: { id: senderId, is_bot: false, first_name: 'User' },
+				chat: { id: chatId, type: 'private' },
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
 				business_connection_id: task.businessConnectionId
@@ -56,8 +61,8 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		} else {
 			dummyUpdate.message = {
 				message_id: 0,
-				from: { id: task.userId || 0, is_bot: false, first_name: 'User' },
-				chat: { id: task.userId || 0, type: 'private' },
+				from: { id: senderId, is_bot: false, first_name: 'User' },
+				chat: { id: chatId, type: 'private' },
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
 				message_thread_id: task.threadId
