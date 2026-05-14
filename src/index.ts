@@ -35,8 +35,8 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 				chat: { id: task.userId || 0, type: 'private' },
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
-				message_thread_id: task.threadId
-			}
+				message_thread_id: task.threadId,
+			},
 		};
 		const tctx = new TelegramExecutionContext(bot, dummyUpdate as any);
 
@@ -45,7 +45,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 				const messages: any[] = [
 					{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
 					...(task.history || []),
-					{ role: 'user', content: task.prompt }
+					{ role: 'user', content: task.prompt },
 				];
 
 				const modelId = task.modelId || '@cf/google/gemma-4-26b-a4b-it';
@@ -62,7 +62,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 
 async function markdownToHtml(s: string): Promise<string> {
 	const parsed = (await marked.parse(s)) as string;
-	const allowedTags = ['b', 'i', 'u', 's', 'code', 'pre', 'a', 'blockquote'];
+	const allowedTags = ['b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del', 'code', 'pre', 'a', 'blockquote', 'span'];
 	const tagStack: string[] = [];
 	let result = '';
 	let i = 0;
@@ -97,9 +97,27 @@ async function markdownToHtml(s: string): Promise<string> {
 							result += `<${tagName}>`;
 						}
 					}
+					i += fullTag.length;
+					continue;
+				} else if (tagName === 'p') {
+					if (isClosing) {
+						result += '\n\n';
+					}
+					i += fullTag.length;
+					continue;
+				} else if (tagName === 'br') {
+					result += '\n';
+					i += fullTag.length;
+					continue;
+				} else if (tagName === 'li') {
+					if (!isClosing) {
+						result += '• ';
+					} else {
+						result += '\n';
+					}
+					i += fullTag.length;
+					continue;
 				}
-				i += fullTag.length;
-				continue;
 			}
 		}
 
@@ -128,16 +146,10 @@ async function markdownToHtml(s: string): Promise<string> {
 		}
 	}
 
-	return result;
+	return result.trim();
 }
 
-async function streamAiResponse(
-	bot: TelegramExecutionContext,
-	env: Env,
-	model: string,
-	messages: any[],
-	task: Task
-): Promise<string> {
+async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: string, messages: any[], task: Task): Promise<string> {
 	const currentMessages: any[] = [...messages];
 	let fullResponse = '';
 
@@ -153,11 +165,11 @@ async function streamAiResponse(
 						function: {
 							name: t.name,
 							description: t.description,
-							parameters: t.parameters
-						}
-					}))
+							parameters: t.parameters,
+						},
+					})),
 				},
-				{ gateway: { id: 'default' } }
+				{ gateway: { id: 'default' } },
 			)) as any;
 
 			const toolCalls = response.tool_calls || response.choices?.[0]?.message?.tool_calls;
@@ -166,7 +178,7 @@ async function streamAiResponse(
 				currentMessages.push({
 					role: 'assistant',
 					content: response.choices?.[0]?.message?.content || null,
-					tool_calls: toolCalls
+					tool_calls: toolCalls,
 				});
 
 				for (const toolCall of toolCalls) {
@@ -188,14 +200,14 @@ async function streamAiResponse(
 								role: 'tool',
 								name: name,
 								tool_call_id: toolCall.id,
-								content: typeof result === 'string' ? result : JSON.stringify(result)
+								content: typeof result === 'string' ? result : JSON.stringify(result),
 							});
 						} catch (e) {
 							currentMessages.push({
 								role: 'tool',
 								name: name,
 								tool_call_id: toolCall.id,
-								content: `Error executing tool: ${String(e)}`
+								content: `Error executing tool: ${String(e)}`,
 							});
 						}
 					}
@@ -210,12 +222,10 @@ async function streamAiResponse(
 	const response = await env.AI.run(
 		model as any,
 		{
-			messages: fullResponse
-				? [...currentMessages, { role: 'assistant', content: fullResponse }]
-				: currentMessages,
-			stream: true
+			messages: fullResponse ? [...currentMessages, { role: 'assistant', content: fullResponse }] : currentMessages,
+			stream: true,
 		},
-		{ gateway: { id: 'default' } }
+		{ gateway: { id: 'default' } },
 	);
 
 	if (!(response instanceof ReadableStream)) {
@@ -269,7 +279,7 @@ async function streamAiResponse(
 									chat_id: bot.chatId,
 									message_id: messageId,
 									text: await markdownToHtml(streamContent + '...'),
-									parse_mode: 'HTML'
+									parse_mode: 'HTML',
 								});
 							} catch {
 								/* ignore */
@@ -291,7 +301,7 @@ async function streamAiResponse(
 		try {
 			await bot.api.deleteMessage(bot.bot.api.toString(), {
 				chat_id: bot.chatId,
-				message_id: messageId
+				message_id: messageId,
 			});
 		} catch {
 			/* ignore */
@@ -308,12 +318,12 @@ export default {
 				const task = (await request.json()) as Task;
 				const instance = await env.AI_WORKFLOW.create({ params: task });
 				return new Response(JSON.stringify({ id: instance.id }), {
-					headers: { 'Content-Type': 'application/json' }
+					headers: { 'Content-Type': 'application/json' },
 				});
 			} catch (e) {
 				return new Response(String(e), { status: 500 });
 			}
 		}
 		return new Response('AI Workflow Worker');
-	}
+	},
 };
