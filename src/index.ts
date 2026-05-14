@@ -185,9 +185,12 @@ async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: 
 				{
 					messages: currentMessages,
 					tools: tools.map((t: any) => ({
-						name: t.name,
-						description: t.description,
-						parameters: t.parameters,
+						type: 'function',
+						function: {
+							name: t.name,
+							description: t.description,
+							parameters: t.parameters,
+						},
 					})),
 				},
 				{ gateway: { id: 'default' } },
