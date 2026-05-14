@@ -244,19 +244,20 @@ const fetchTool = {
 
 async function customRunWithTools(ai: any, model: string, input: any, config: any) {
 	const messages = [...input.messages];
-	
-	// FIX 1: Cloudflare requires a flat array of tools, no 'type: function' wrapper
-	const cfTools = (input.tools || []).map((t: any) => ({
-		name: t.name,
-		description: t.description,
-		parameters: t.parameters
+	const tools = input.tools || [];
+
+	// 1. STRICT SCHEMA: Must use OpenAI format to pass Cloudflare API validation and avoid 500 errors
+	const cfTools = tools.map((t: any) => ({
+		type: 'function',
+		function: {
+			name: t.name,
+			description: t.description,
+			parameters: t.parameters
+		}
 	}));
 
 	if (cfTools.length === 0) {
-		return await ai.run(model, {
-			messages,
-			stream: config.streamFinalResponse
-		});
+		return await ai.run(model, { messages, stream: config.streamFinalResponse });
 	}
 
 	const response = await ai.run(model, {
@@ -265,31 +266,72 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 		stream: false
 	}) as any;
 
-	if (response && response.tool_calls && response.tool_calls.length > 0) {
-		const originalTools = input.tools || [];
+	let toolCalls = response && response.tool_calls ? [...response.tool_calls] : [];
+	let responseText = (response && response.response) || '';
+
+	// 2. GEMMA FALLBACK: Parse raw text tokens if the model doesn't support native Cloudflare tool interception
+	if (toolCalls.length === 0 && responseText.includes('<|tool_call>')) {
+		const gemmaRegex = /<\|tool_call>call:([a-zA-Z0-9_]+)(.*?)<tool_call\|>/g;
+		let match;
+		while ((match = gemmaRegex.exec(responseText)) !== null) {
+			let name = match[1];
+			// Catch Gemma hallucinating an incorrect tool name based on the system prompt
+			if (name === 'http_fetch') name = 'fetch'; 
+			
+			let argsString = match[2].trim();
+			// Sanitize Gemma's malformed pseudo-JSON (e.g., {url: '...'} -> {"url": "..."})
+			argsString = argsString.replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
+								   .replace(/:\s*'([^']*)'/g, ': "$1"');
+			
+			toolCalls.push({
+				id: `call_${Math.random().toString(36).substring(2, 9)}`,
+				type: 'function',
+				function: { name, arguments: argsString }
+			});
+		}
+		// Clean the hallucinated tokens from the response text
+		responseText = responseText.replace(/<\|tool_call>.*?<tool_call\|>/g, '').trim();
+	}
+
+	if (toolCalls.length > 0) {
+		// 3. NORMALIZE: Ensure the history array perfectly matches the API schema
+		const normalizedToolCalls = toolCalls.map((call: any, index: number) => {
+			const name = call.name || (call.function && call.function.name);
+			let args = call.arguments || (call.function && call.function.arguments);
+			if (typeof args !== 'string') {
+				try { args = JSON.stringify(args); } catch(e) { args = '{}'; }
+			}
+			return {
+				id: call.id || `call_${Math.random().toString(36).substring(2, 9)}_${index}`,
+				type: 'function',
+				function: { name, arguments: args }
+			};
+		});
+
+		messages.push({ 
+			role: 'assistant', 
+			content: responseText, 
+			tool_calls: normalizedToolCalls 
+		});
 		
-		for (const call of response.tool_calls) {
-			// FIX 2: Cloudflare expects the assistant message content to be the stringified tool object
-			messages.push({ role: 'assistant', content: JSON.stringify(call) });
-
-			const toolName = call.name;
-			let toolArgs = call.arguments;
-			const tool = originalTools.find((t: any) => t.name === toolName);
-
+		// 4. EXECUTE
+		for (const call of normalizedToolCalls) {
+			const toolName = call.function.name;
+			const toolId = call.id;
+			const toolArgsString = call.function.arguments;
+			const tool = tools.find((t: any) => t.name === toolName);
+			
 			if (tool && tool.function) {
 				try {
-					let parsedArgs = toolArgs;
-					if (typeof parsedArgs === 'string') {
-						try { parsedArgs = JSON.parse(parsedArgs); } catch(e) { /* ignore */ }
-					}
+					let parsedArgs;
+					try { parsedArgs = JSON.parse(toolArgsString); } catch(e) { parsedArgs = toolArgsString; }
 					const result = await tool.function(parsedArgs);
-					// FIX 3: Cloudflare expects the tool response to be pure content, no name or ID
-					messages.push({ role: 'tool', content: String(result) });
+					messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: String(result) });
 				} catch (e) {
-					messages.push({ role: 'tool', content: String(e) });
+					messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: String(e) });
 				}
 			} else {
-				messages.push({ role: 'tool', content: 'Tool not found' });
+				messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: 'Tool not found' });
 			}
 		}
 		
@@ -301,10 +343,7 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	}
 
 	if (config.streamFinalResponse) {
-		return await ai.run(model, {
-			messages,
-			stream: true
-		});
+		return await ai.run(model, { messages, stream: true });
 	}
 
 	return response;
