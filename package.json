@@ -10,7 +10,7 @@
 	"dependencies": {
 		"@cloudflare/ai-utils": "^1.0.1",
 		"@cloudflare/workers-types": "^4.20260511.1",
-		"@codebam/cf-workers-telegram-bot": "^11.10.0",
+		"@codebam/cf-workers-telegram-bot": "^11.11.0",
 		"marked": "^18.0.3"
 	}
 }

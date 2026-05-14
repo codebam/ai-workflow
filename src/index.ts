@@ -432,7 +432,8 @@ async function streamAiResponseToTelegram(
 									chat_id: bot.chatId,
 									message_id: messageId,
 									text: await markdownToHtml(streamContent + '...'),
-									parse_mode: 'HTML'
+									parse_mode: 'HTML',
+									business_connection_id: bot.update.business_message?.business_connection_id
 								});
 							} catch {
 								/* ignore */
@@ -455,7 +456,8 @@ async function streamAiResponseToTelegram(
 				chat_id: bot.chatId,
 				message_id: messageId,
 				text: finalHtml,
-				parse_mode: 'HTML'
+				parse_mode: 'HTML',
+				business_connection_id: bot.update.business_message?.business_connection_id
 			});
 		} catch {
 			await bot.reply(finalHtml, 'HTML');
