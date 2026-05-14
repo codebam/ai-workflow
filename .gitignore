@@ -16,3 +16,4 @@ lerna-debug.log
 .direnv/
 result
 docs/
+src/index.js

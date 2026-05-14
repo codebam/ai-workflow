@@ -185,12 +185,9 @@ async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: 
 				{
 					messages: currentMessages,
 					tools: tools.map((t: any) => ({
-						type: 'function',
-						function: {
-							name: t.name,
-							description: t.description,
-							parameters: t.parameters,
-						},
+						name: t.name,
+						description: t.description,
+						parameters: t.parameters,
 					})),
 				},
 				{ gateway: { id: 'default' } },
@@ -237,22 +234,26 @@ async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: 
 						}
 					}
 				}
-			} else if (content.includes('<|tool_call|>')) {
-				currentMessages.push({
-					role: 'assistant',
-					content: content,
-				});
+			} else if (content.includes('<|tool_call')) {
+				const toolCallRegex = /<\|tool_call[\|]?>call:([a-zA-Z0-9_]+)\{(.*?)\}<tool_call\|?>/g;
+				let match;
+				let foundToolCall = false;
 
-				const toolCallMatch = /<\|tool_call\|>call:([a-zA-Z0-9_]+)\{(.*?)\}<tool_call\|>/.exec(content);
-				if (toolCallMatch) {
-					const name = toolCallMatch[1];
-					const argsString = `{${toolCallMatch[2]}}`.replace(/<\|"\|>/g, '"');
+				while ((match = toolCallRegex.exec(content)) !== null) {
+					foundToolCall = true;
+					const name = match[1];
+					const argsString = `{${match[2]}}`.replace(/<\|"\|>/g, '"');
 					let args = {};
 					try {
 						args = JSON.parse(argsString);
 					} catch (e) {
 						console.error('Error parsing tool call arguments:', e);
 					}
+
+					currentMessages.push({
+						role: 'assistant',
+						content: match[0],
+					});
 
 					const toolDef = tools.find((t: any) => t.name === name);
 					if (toolDef && toolDef.run) {
@@ -271,7 +272,10 @@ async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: 
 							});
 						}
 					}
-				} else {
+				}
+
+				if (!foundToolCall) {
+					fullResponse = content;
 					break;
 				}
 			} else {
