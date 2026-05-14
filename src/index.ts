@@ -271,14 +271,28 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	if (response && response.tool_calls && response.tool_calls.length > 0) {
 		messages.push({ role: 'assistant', content: response.response || '', tool_calls: response.tool_calls });
 		for (const call of response.tool_calls) {
-			const tool = tools.find((t: any) => t.name === call.name);
+			const toolName = call.name || (call.function && call.function.name);
+			const toolId = call.id; // OpenAI format uses tool_call_id
+			let toolArgs = call.arguments || (call.function && call.function.arguments);
+			
+			const tool = tools.find((t: any) => t.name === toolName);
 			if (tool && tool.function) {
 				try {
-					const result = await tool.function(call.arguments);
-					messages.push({ role: 'tool', name: call.name, content: String(result) });
+					let parsedArgs = toolArgs;
+					if (typeof parsedArgs === 'string') {
+						try {
+							parsedArgs = JSON.parse(parsedArgs);
+						} catch(e) {
+							// fallback
+						}
+					}
+					const result = await tool.function(parsedArgs);
+					messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: String(result) });
 				} catch (e) {
-					messages.push({ role: 'tool', name: call.name, content: String(e) });
+					messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: String(e) });
 				}
+			} else {
+				messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: 'Tool not found' });
 			}
 		}
 		
