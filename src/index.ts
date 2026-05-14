@@ -246,7 +246,6 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	const messages = [...input.messages];
 	const tools = input.tools || [];
 
-	// 1. STRICT SCHEMA: Must use OpenAI format to pass Cloudflare API validation and avoid 500 errors
 	const cfTools = tools.map((t: any) => ({
 		type: 'function',
 		function: {
@@ -266,20 +265,27 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 		stream: false
 	}) as any;
 
-	let toolCalls = response && response.tool_calls ? [...response.tool_calls] : [];
-	let responseText = (response && response.response) || '';
+	// FIX: Robustly extract from BOTH Cloudflare formats (Standard and OpenAI-compatible)
+	let toolCalls = [];
+	if (response?.tool_calls) {
+		toolCalls = [...response.tool_calls];
+	} else if (response?.choices?.[0]?.message?.tool_calls) {
+		toolCalls = [...response.choices[0].message.tool_calls];
+	}
 
-	// 2. GEMMA FALLBACK: Parse raw text tokens if the model doesn't support native Cloudflare tool interception
+	let responseText = response?.response || response?.choices?.[0]?.message?.content || '';
+
+	// GEMMA FALLBACK: Catch raw tokens if native interception fails
 	if (toolCalls.length === 0 && responseText.includes('<|tool_call>')) {
-		const gemmaRegex = /<\|tool_call>call:([a-zA-Z0-9_]+)(.*?)<tool_call\|>/g;
+		// Use [\s\S]*? to safely match across multiple lines if Gemma formats the JSON nicely
+		const gemmaRegex = /<\|tool_call>\s*call:\s*([a-zA-Z0-9_]+)([\s\S]*?)<tool_call\|>/g;
 		let match;
 		while ((match = gemmaRegex.exec(responseText)) !== null) {
-			let name = match[1];
-			// Catch Gemma hallucinating an incorrect tool name based on the system prompt
-			if (name === 'http_fetch') name = 'fetch'; 
+			let name = match[1].trim();
+			if (name === 'http_fetch' || name === 'api_fetch') name = 'fetch'; 
 			
 			let argsString = match[2].trim();
-			// Sanitize Gemma's malformed pseudo-JSON (e.g., {url: '...'} -> {"url": "..."})
+			// Sanitize Gemma's malformed JSON syntax to ensure JSON.parse doesn't throw
 			argsString = argsString.replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
 								   .replace(/:\s*'([^']*)'/g, ': "$1"');
 			
@@ -289,12 +295,11 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 				function: { name, arguments: argsString }
 			});
 		}
-		// Clean the hallucinated tokens from the response text
-		responseText = responseText.replace(/<\|tool_call>.*?<tool_call\|>/g, '').trim();
+		// Strip the raw tokens from the visible response so the user never sees them
+		responseText = responseText.replace(/<\|tool_call>[\s\S]*?<tool_call\|>/g, '').trim();
 	}
 
 	if (toolCalls.length > 0) {
-		// 3. NORMALIZE: Ensure the history array perfectly matches the API schema
 		const normalizedToolCalls = toolCalls.map((call: any, index: number) => {
 			const name = call.name || (call.function && call.function.name);
 			let args = call.arguments || (call.function && call.function.arguments);
@@ -314,7 +319,6 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 			tool_calls: normalizedToolCalls 
 		});
 		
-		// 4. EXECUTE
 		for (const call of normalizedToolCalls) {
 			const toolName = call.function.name;
 			const toolId = call.id;
