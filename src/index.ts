@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { TelegramBot, TelegramExecutionContext } from '@codebam/cf-workers-telegram-bot';
+import { runWithTools } from '@cloudflare/ai-utils';
 import { marked } from 'marked';
 
 export interface Task {
@@ -17,6 +18,7 @@ export interface Task {
 	systemPrompt?: string;
 	telegramToken?: string;
 	tools?: any[];
+	stream?: boolean;
 }
 
 export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
@@ -31,7 +33,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 
 		const bot = new TelegramBot(token);
 		const dummyUpdate: any = {
-			update_id: 0,
+			update_id: 0
 		};
 
 		if (task.updateType === 'guest_message') {
@@ -41,7 +43,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 				chat: { id: task.userId || 0, type: 'private' },
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
-				guest_query_id: task.guestQueryId,
+				guest_query_id: task.guestQueryId
 			};
 		} else if (task.updateType === 'business_message') {
 			dummyUpdate.business_message = {
@@ -50,7 +52,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 				chat: { id: task.userId || 0, type: 'private' },
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
-				business_connection_id: task.businessConnectionId,
+				business_connection_id: task.businessConnectionId
 			};
 		} else {
 			dummyUpdate.message = {
@@ -59,7 +61,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 				chat: { id: task.userId || 0, type: 'private' },
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
-				message_thread_id: task.threadId,
+				message_thread_id: task.threadId
 			};
 		}
 		const tctx = new TelegramExecutionContext(bot, dummyUpdate as any);
@@ -69,12 +71,12 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 				const messages: any[] = [
 					{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
 					...(task.history || []),
-					{ role: 'user', content: task.prompt },
+					{ role: 'user', content: task.prompt }
 				];
 
-				const modelId = task.modelId || '@cf/google/gemma-4-26b-a4b-it';
+				const modelId = task.modelId || '@cf/meta/llama-3.1-8b-instruct-fp8';
 
-				await streamAiResponse(tctx, env, modelId, messages, task);
+				await streamAiResponseToTelegram(tctx, env, modelId, messages, task);
 			} catch (e) {
 				console.error('Error in workflow process-ai-task:', e);
 				await tctx.reply(`Error: ${String(e)}`);
@@ -86,7 +88,22 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 
 async function markdownToHtml(s: string): Promise<string> {
 	const parsed = (await marked.parse(s)) as string;
-	const allowedTags = ['b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del', 'code', 'pre', 'a', 'blockquote', 'span'];
+	const allowedTags = [
+		'b',
+		'strong',
+		'i',
+		'em',
+		'u',
+		'ins',
+		's',
+		'strike',
+		'del',
+		'code',
+		'pre',
+		'a',
+		'blockquote',
+		'span'
+	];
 	const tagStack: string[] = [];
 	let result = '';
 	let i = 0;
@@ -173,139 +190,71 @@ async function markdownToHtml(s: string): Promise<string> {
 	return result.trim();
 }
 
-async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: string, messages: any[], task: Task): Promise<string> {
-	const currentMessages: any[] = [...messages];
-	let fullResponse = '';
-
-	if (task.type === 'tool_call') {
-		const tools = task.tools || [];
-		for (let i = 0; i < 5; i++) {
-			const response = (await env.AI.run(
-				model as any,
-				{
-					messages: currentMessages,
-					tools: tools.map((t: any) => ({
-						type: 'function',
-						function: {
-							name: t.name,
-							description: t.description,
-							parameters: t.parameters,
-						},
-					})),
-				},
-				{ gateway: { id: 'default' } },
-			)) as any;
-
-			let toolCalls = response.tool_calls || response.choices?.[0]?.message?.tool_calls;
-
-			// Fallback: Check for raw tags in the response content
-			const content = response.response || response.choices?.[0]?.message?.content || '';
-			if ((!toolCalls || toolCalls.length === 0) && content.includes('<|tool_call>')) {
-				const regex = /<\|tool_call>call:([a-zA-Z0-9_.]+)(?:\((.*?)\)|\{(.*?)\})<tool_call\|>/g;
-				const matches = [...content.matchAll(regex)];
-				if (matches.length > 0) {
-					toolCalls = matches.map(m => {
-						const name = m[1].replace(/[^a-zA-Z0-9_]/g, '_');
-						let argString = m[2] || m[3] || '{}';
-						
-						// Handle specific weird format <|"|>
-						argString = argString.replace(/<\|"\|>/g, '"');
-						
-						let args = {};
-						try {
-							// Try parsing as JSON or a simple key=val list
-							if (argString.trim().startsWith('{')) {
-								args = JSON.parse(argString);
-							} else if (argString.includes('=')) {
-								const pairs = argString.split(/,\s*/);
-								for (const pair of pairs) {
-									const [key, val] = pair.split('=').map((s: string) => s.trim());
-									if (key && val) {
-										(args as any)[key] = val.replace(/^['"]|['"]$/g, '');
-										if (!isNaN(Number((args as any)[key]))) {
-											(args as any)[key] = Number((args as any)[key]);
-										}
-									}
-								}
-							} else {
-								// Attempt parsing wrapped in {}
-								args = JSON.parse(`{${argString}}`);
-							}
-						} catch (e) {
-							console.error('Error parsing fallback tool arguments:', e);
-						}
-						return {
-							id: `fallback-${crypto.randomUUID()}`,
-							name,
-							function: { name, arguments: args },
-							arguments: args
-						};
-					});
-				}
-			}
-
-			if (toolCalls && toolCalls.length > 0) {
-				currentMessages.push({
-					role: 'assistant',
-					content: response.response || response.choices?.[0]?.message?.content || null,
-					tool_calls: toolCalls,
-				});
-
-				for (const toolCall of toolCalls) {
-					const name = toolCall.name || toolCall.function?.name;
-					let args = toolCall.arguments || toolCall.function?.arguments;
-					if (typeof args === 'string') {
-						try {
-							args = JSON.parse(args);
-						} catch {
-							/* ignore */
-						}
-					}
-
-					const toolDef = tools.find((t: any) => t.name === name);
-					if (toolDef && toolDef.run) {
-						try {
-							const result = await toolDef.run(args);
-							currentMessages.push({
-								role: 'tool',
-								name: name,
-								tool_call_id: toolCall.id,
-								content: typeof result === 'string' ? result : JSON.stringify(result),
-							});
-						} catch (e) {
-							currentMessages.push({
-								role: 'tool',
-								name: name,
-								tool_call_id: toolCall.id,
-								content: `Error executing tool: ${String(e)}`,
-							});
-						}
-					}
-				}
-			} else {
-				fullResponse = response.response || response.choices?.[0]?.message?.content || '';
-				break;
-			}
+const fetchTool = {
+	name: 'fetch',
+	description:
+		'Perform an HTTP request to any API. Use this to get information from the internet.',
+	parameters: {
+		type: 'object',
+		properties: {
+			url: { type: 'string', description: 'The URL to fetch' },
+			method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], default: 'GET' },
+			headers: { type: 'object', description: 'HTTP headers to include in the request' },
+			body: { type: 'string', description: 'The request body' }
+		},
+		required: ['url']
+	},
+	run: async ({
+		url,
+		method,
+		headers,
+		body
+	}: {
+		url: string;
+		method?: string;
+		headers?: Record<string, string>;
+		body?: string;
+	}) => {
+		try {
+			const res = await fetch(url, {
+				method: method || 'GET',
+				headers: headers || {},
+				body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
+			});
+			return await res.text();
+		} catch (e) {
+			return `Error executing fetch: ${String(e)}`;
 		}
 	}
+};
 
-	const response = await env.AI.run(
+async function streamAiResponseToTelegram(
+	bot: TelegramExecutionContext,
+	env: Env,
+	model: string,
+	messages: any[],
+	task: Task
+): Promise<string> {
+	const aiResponse = await runWithTools(
+		env.AI as any,
 		model as any,
 		{
-			messages: fullResponse ? [...currentMessages, { role: 'assistant', content: fullResponse }] : currentMessages,
-			stream: true,
+			messages: messages as any,
+			tools: task.type === 'tool_call' ? [fetchTool] : []
 		},
-		{ gateway: { id: 'default' } },
+		{
+			streamFinalResponse: true
+		}
 	);
 
-	if (!(response instanceof ReadableStream)) {
-		const data = response as any;
-		const content = data.response || data.choices?.[0]?.message?.[0]?.content || data.choices?.[0]?.message?.content || '';
+	if (!(aiResponse instanceof ReadableStream)) {
+		const content =
+			(aiResponse as any).response || (aiResponse as any).choices?.[0]?.message?.content || '';
 		await bot.reply(await markdownToHtml(content), 'HTML');
 		return content;
 	}
 
-	const reader = response.getReader();
+	const reader = aiResponse.getReader();
 	const decoder = new TextDecoder();
 	let streamContent = '';
 	let lastUpdate = 0;
@@ -353,7 +302,7 @@ async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: 
 									chat_id: bot.chatId,
 									message_id: messageId,
 									text: await markdownToHtml(streamContent + '...'),
-									parse_mode: 'HTML',
+									parse_mode: 'HTML'
 								});
 							} catch {
 								/* ignore */
@@ -376,7 +325,7 @@ async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: 
 				chat_id: bot.chatId,
 				message_id: messageId,
 				text: finalHtml,
-				parse_mode: 'HTML',
+				parse_mode: 'HTML'
 			});
 		} catch {
 			await bot.reply(finalHtml, 'HTML');
@@ -393,14 +342,49 @@ export default {
 		if (request.method === 'POST') {
 			try {
 				const task = (await request.json()) as Task;
+
+				if (task.stream) {
+					const messages: any[] = [
+						{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
+						...(task.history || []),
+						{ role: 'user', content: task.prompt }
+					];
+
+					const modelId = task.modelId || '@cf/meta/llama-3.1-8b-instruct-fp8';
+
+					const aiResponse = await runWithTools(
+						env.AI as any,
+						modelId as any,
+						{
+							messages: messages as any,
+							tools: task.type === 'tool_call' ? [fetchTool] : []
+						},
+						{
+							streamFinalResponse: true
+						}
+					);
+
+					if (aiResponse instanceof ReadableStream) {
+						return new Response(aiResponse, {
+							headers: {
+								'Content-Type': 'text/event-stream',
+								'Cache-Control': 'no-cache',
+								Connection: 'keep-alive'
+							}
+						});
+					} else {
+						return Response.json(aiResponse);
+					}
+				}
+
 				const instance = await env.AI_WORKFLOW.create({ params: task });
 				return new Response(JSON.stringify({ id: instance.id }), {
-					headers: { 'Content-Type': 'application/json' },
+					headers: { 'Content-Type': 'application/json' }
 				});
 			} catch (e) {
 				return new Response(String(e), { status: 500 });
 			}
 		}
 		return new Response('AI Workflow Worker');
-	},
+	}
 };
