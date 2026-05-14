@@ -247,12 +247,9 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	const tools = input.tools || [];
 
 	const cfTools = tools.map((t: any) => ({
-		type: 'function',
-		function: {
-			name: t.name,
-			description: t.description,
-			parameters: t.parameters
-		}
+		name: t.name,
+		description: t.description,
+		parameters: t.parameters
 	}));
 
 	if (cfTools.length === 0) {
@@ -262,6 +259,7 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 		});
 	}
 
+	// 1. Initial run to detect if the model wants to call a tool
 	const response = await ai.run(model, {
 		messages,
 		tools: cfTools,
@@ -269,39 +267,47 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	}) as any;
 
 	if (response && response.tool_calls && response.tool_calls.length > 0) {
-		messages.push({ role: 'assistant', content: response.response || '', tool_calls: response.tool_calls });
+		// 2. Append assistant's tool call intent to history
+		messages.push({ 
+			role: 'assistant', 
+			content: response.response || '', 
+			tool_calls: response.tool_calls 
+		});
+		
+		// 3. Execute all requested tools
 		for (const call of response.tool_calls) {
-			const toolName = call.name || (call.function && call.function.name);
-			const toolId = call.id; // OpenAI format uses tool_call_id
-			let toolArgs = call.arguments || (call.function && call.function.arguments);
+			const toolName = call.name; 
+			let toolArgs = call.arguments;
 			
 			const tool = tools.find((t: any) => t.name === toolName);
+			
 			if (tool && tool.function) {
 				try {
 					let parsedArgs = toolArgs;
 					if (typeof parsedArgs === 'string') {
-						try {
-							parsedArgs = JSON.parse(parsedArgs);
-						} catch(e) {
-							// fallback
-						}
+						try { parsedArgs = JSON.parse(parsedArgs); } catch(e) { /* ignore */ }
 					}
 					const result = await tool.function(parsedArgs);
-					messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: String(result) });
+					// Append successful tool result
+					messages.push({ role: 'tool', name: toolName, content: String(result) });
 				} catch (e) {
-					messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: String(e) });
+					// Append error so the AI knows it failed
+					messages.push({ role: 'tool', name: toolName, content: String(e) });
 				}
 			} else {
-				messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: 'Tool not found' });
+				messages.push({ role: 'tool', name: toolName, content: 'Tool not found' });
 			}
 		}
 		
+		// 4. Run final response WITH tools passed back in so the model retains context
 		return await ai.run(model, {
 			messages,
+			tools: cfTools, 
 			stream: config.streamFinalResponse
 		});
 	}
 
+	// Fallback: If no tools were called, stream standard text response
 	if (config.streamFinalResponse) {
 		return await ai.run(model, {
 			messages,
