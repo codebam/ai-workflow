@@ -20,6 +20,7 @@ export interface Task {
 	modelId?: string;
 	fileId?: string;
 	systemPrompt?: string;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	tools?: any[];
 }
 
@@ -44,6 +45,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Environment, Task> {
 
 		await step.do('process-ai-task', async () => {
 			try {
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const messages: any[] = [
 					{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
 					...(task.history || []),
@@ -51,9 +53,8 @@ export class AIWorkflow extends WorkflowEntrypoint<Environment, Task> {
 				];
 
 				const modelId = task.modelId || '@cf/google/gemma-4-26b-a4b-it';
-				
-				await streamAiResponse(tctx, env, modelId, messages, task);
 
+				await streamAiResponse(tctx, env, modelId, messages, task);
 			} catch (e) {
 				console.error('Error in workflow process-ai-task:', e);
 				await tctx.reply(`Error: ${String(e)}`);
@@ -85,7 +86,9 @@ async function markdownToHtml(s: string): Promise<string> {
 								const top = tagStack.pop();
 								if (top) {
 									result += `</${top}>`;
-									if (top === tagName) break;
+									if (top === tagName) {
+										break;
+									}
 								}
 							}
 						}
@@ -104,9 +107,11 @@ async function markdownToHtml(s: string): Promise<string> {
 			}
 		}
 
-		if (parsed[i] === '<') result += '&lt;';
-		else if (parsed[i] === '>') result += '&gt;';
-		else if (parsed[i] === '&') {
+		if (parsed[i] === '<') {
+			result += '&lt;';
+		} else if (parsed[i] === '>') {
+			result += '&gt;';
+		} else if (parsed[i] === '&') {
 			const entityMatch = /^&[a-z0-9#]+;/i.exec(parsed.slice(i));
 			if (entityMatch) {
 				result += entityMatch[0];
@@ -114,13 +119,17 @@ async function markdownToHtml(s: string): Promise<string> {
 				continue;
 			}
 			result += '&amp;';
-		} else result += parsed[i];
+		} else {
+			result += parsed[i];
+		}
 		i++;
 	}
 
 	while (tagStack.length > 0) {
 		const top = tagStack.pop();
-		if (top) result += `</${top}>`;
+		if (top) {
+			result += `</${top}>`;
+		}
 	}
 
 	return result;
@@ -134,13 +143,16 @@ async function streamAiResponse(
 	task: Task
 ): Promise<string> {
 	// Implementation follows the hint: editMessageText first, then bot.reply final.
-	let currentMessages = [...messages];
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const currentMessages: any[] = [...messages];
 	let fullResponse = '';
 
 	if (task.type === 'tool_call') {
 		const tools = task.tools || [];
 		for (let i = 0; i < 5; i++) {
+			 
 			const response = (await env.AI.run(
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				model as any,
 				{
 					messages: currentMessages,
@@ -154,6 +166,7 @@ async function streamAiResponse(
 					}))
 				},
 				{ gateway: { id: 'default' } }
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			)) as any;
 
 			const toolCalls = response.tool_calls || response.choices?.[0]?.message?.tool_calls;
@@ -171,9 +184,12 @@ async function streamAiResponse(
 					if (typeof args === 'string') {
 						try {
 							args = JSON.parse(args);
-						} catch { /* ignore */ }
+						} catch {
+							/* ignore */
+						}
 					}
 
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					const toolDef = tools.find((t: any) => t.name === name);
 					if (toolDef && toolDef.run) {
 						try {
@@ -202,13 +218,21 @@ async function streamAiResponse(
 	}
 
 	// Final streaming part
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const response = await env.AI.run(model as any, {
-		messages: fullResponse ? [...currentMessages, { role: 'assistant', content: fullResponse }] : currentMessages,
-		stream: true
-	}, { gateway: { id: 'default' } });
+	 
+	const response = await env.AI.run(
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		model as any,
+		{
+			messages: fullResponse
+				? [...currentMessages, { role: 'assistant', content: fullResponse }]
+				: currentMessages,
+			stream: true
+		},
+		{ gateway: { id: 'default' } }
+	);
 
 	if (!(response instanceof ReadableStream)) {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const data = response as any;
 		const content = data.response || data.choices?.[0]?.message?.content || '';
 		await bot.reply(await markdownToHtml(content), 'HTML');
@@ -224,6 +248,7 @@ async function streamAiResponse(
 
 	// Send initial placeholder to get messageId
 	const res = await bot.reply('<i>Thinking...</i>', 'HTML');
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const json = (await res.json()) as any;
 	if (json.ok && json.result?.message_id) {
 		messageId = json.result.message_id;
@@ -231,7 +256,7 @@ async function streamAiResponse(
 
 	for (;;) {
 		const { done, value } = await reader.read();
-		if (done) break;
+		if (done) {break;}
 
 		buffer += decoder.decode(value, { stream: true });
 		const lines = buffer.split('\n');
@@ -239,10 +264,11 @@ async function streamAiResponse(
 
 		for (const line of lines) {
 			const trimmedLine = line.trim();
-			if (!trimmedLine || trimmedLine === 'data: [DONE]') continue;
+			if (!trimmedLine || trimmedLine === 'data: [DONE]') {continue;}
 
 			if (trimmedLine.startsWith('data: ')) {
 				try {
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					const data = JSON.parse(trimmedLine.slice(6)) as any;
 					const content = data.choices?.[0]?.delta?.content ?? data.response ?? '';
 
@@ -256,11 +282,15 @@ async function streamAiResponse(
 									text: await markdownToHtml(streamContent + '...'),
 									parse_mode: 'HTML'
 								});
-							} catch { /* ignore */ }
+							} catch {
+								/* ignore */
+							}
 							lastUpdate = Date.now();
 						}
 					}
-				} catch { /* ignore */ }
+				} catch {
+					/* ignore */
+				}
 			}
 		}
 	}
@@ -268,7 +298,7 @@ async function streamAiResponse(
 	// Final full reply
 	const finalHtml = await markdownToHtml(streamContent);
 	await bot.reply(finalHtml, 'HTML');
-	
+
 	// Delete placeholder
 	if (messageId) {
 		try {
@@ -276,7 +306,9 @@ async function streamAiResponse(
 				chat_id: bot.chatId,
 				message_id: messageId
 			});
-		} catch { /* ignore */ }
+		} catch {
+			/* ignore */
+		}
 	}
 
 	return streamContent;
