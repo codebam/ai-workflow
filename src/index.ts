@@ -5,6 +5,9 @@ import { marked } from 'marked';
 
 export interface Task {
 	type: 'code' | 'message' | 'business_message' | 'photo' | 'gen_photo' | 'voice' | 'tool_call';
+	updateType?: string;
+	guestQueryId?: string;
+	businessConnectionId?: string;
 	prompt: string;
 	userId?: number;
 	threadId?: number;
@@ -27,17 +30,38 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		}
 
 		const bot = new TelegramBot(token);
-		const dummyUpdate = {
+		const dummyUpdate: any = {
 			update_id: 0,
-			message: {
+		};
+
+		if (task.updateType === 'guest_message') {
+			dummyUpdate.guest_message = {
+				message_id: 0,
+				from: { id: task.userId || 0, is_bot: false, first_name: 'User' },
+				chat: { id: task.userId || 0, type: 'private' },
+				date: Math.floor(Date.now() / 1000),
+				text: task.prompt,
+				guest_query_id: task.guestQueryId,
+			};
+		} else if (task.updateType === 'business_message') {
+			dummyUpdate.business_message = {
+				message_id: 0,
+				from: { id: task.userId || 0, is_bot: false, first_name: 'User' },
+				chat: { id: task.userId || 0, type: 'private' },
+				date: Math.floor(Date.now() / 1000),
+				text: task.prompt,
+				business_connection_id: task.businessConnectionId,
+			};
+		} else {
+			dummyUpdate.message = {
 				message_id: 0,
 				from: { id: task.userId || 0, is_bot: false, first_name: 'User' },
 				chat: { id: task.userId || 0, type: 'private' },
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
 				message_thread_id: task.threadId,
-			},
-		};
+			};
+		}
 		const tctx = new TelegramExecutionContext(bot, dummyUpdate as any);
 
 		await step.do('process-ai-task', async () => {
@@ -230,7 +254,7 @@ async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: 
 
 	if (!(response instanceof ReadableStream)) {
 		const data = response as any;
-		const content = data.response || data.choices?.[0]?.message?.content || '';
+		const content = data.response || data.choices?.[0]?.message?.[0]?.content || data.choices?.[0]?.message?.content || '';
 		await bot.reply(await markdownToHtml(content), 'HTML');
 		return content;
 	}
@@ -242,12 +266,16 @@ async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: 
 	let messageId: number | undefined;
 	let buffer = '';
 
-	const res = await bot.reply('<i>Thinking...</i>', 'HTML');
-	if (res && res.status === 200) {
-		const json = (await res.json()) as any;
-		if (json.ok && json.result?.message_id) {
-			messageId = json.result.message_id;
+	if (bot.update_type !== 'guest_message') {
+		const res = await bot.reply('<i>Thinking...</i>', 'HTML');
+		if (res && res.status === 200) {
+			const json = (await res.json()) as any;
+			if (json.ok && json.result?.message_id) {
+				messageId = json.result.message_id;
+			}
 		}
+	} else {
+		await bot.sendTyping();
 	}
 
 	for (;;) {
@@ -295,17 +323,20 @@ async function streamAiResponse(bot: TelegramExecutionContext, env: Env, model: 
 	}
 
 	const finalHtml = await markdownToHtml(streamContent);
-	await bot.reply(finalHtml, 'HTML');
 
 	if (messageId) {
 		try {
-			await bot.api.deleteMessage(bot.bot.api.toString(), {
+			await bot.api.editMessageText(bot.bot.api.toString(), {
 				chat_id: bot.chatId,
 				message_id: messageId,
+				text: finalHtml,
+				parse_mode: 'HTML',
 			});
 		} catch {
-			/* ignore */
+			await bot.reply(finalHtml, 'HTML');
 		}
+	} else {
+		await bot.reply(finalHtml, 'HTML');
 	}
 
 	return streamContent;
