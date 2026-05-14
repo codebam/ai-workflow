@@ -1,15 +1,7 @@
-import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workflows';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { TelegramBot, TelegramExecutionContext } from '@codebam/cf-workers-telegram-bot';
 import { marked } from 'marked';
-
-export interface Environment {
-	SECRET_TELEGRAM_API_TOKEN: string;
-	GITHUB_TOKEN?: string;
-	AI: Ai;
-	R2: R2Bucket;
-	CONVERSATION_HISTORY: KVNamespace;
-	AI_WORKFLOW: Workflow;
-}
 
 export interface Task {
 	type: 'code' | 'message' | 'business_message' | 'photo' | 'gen_photo' | 'voice' | 'tool_call';
@@ -20,11 +12,10 @@ export interface Task {
 	modelId?: string;
 	fileId?: string;
 	systemPrompt?: string;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	tools?: any[];
 }
 
-export class AIWorkflow extends WorkflowEntrypoint<Environment, Task> {
+export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 	async run(event: WorkflowEvent<Task>, step: WorkflowStep) {
 		const task = event.payload;
 		const env = this.env;
@@ -40,12 +31,10 @@ export class AIWorkflow extends WorkflowEntrypoint<Environment, Task> {
 				text: task.prompt
 			}
 		};
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const tctx = new TelegramExecutionContext(bot, dummyUpdate as any);
 
 		await step.do('process-ai-task', async () => {
 			try {
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const messages: any[] = [
 					{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
 					...(task.history || []),
@@ -137,22 +126,18 @@ async function markdownToHtml(s: string): Promise<string> {
 
 async function streamAiResponse(
 	bot: TelegramExecutionContext,
-	env: Environment,
+	env: Env,
 	model: string,
 	messages: any[],
 	task: Task
 ): Promise<string> {
-	// Implementation follows the hint: editMessageText first, then bot.reply final.
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const currentMessages: any[] = [...messages];
 	let fullResponse = '';
 
 	if (task.type === 'tool_call') {
 		const tools = task.tools || [];
 		for (let i = 0; i < 5; i++) {
-			 
 			const response = (await env.AI.run(
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				model as any,
 				{
 					messages: currentMessages,
@@ -166,7 +151,6 @@ async function streamAiResponse(
 					}))
 				},
 				{ gateway: { id: 'default' } }
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			)) as any;
 
 			const toolCalls = response.tool_calls || response.choices?.[0]?.message?.tool_calls;
@@ -189,7 +173,6 @@ async function streamAiResponse(
 						}
 					}
 
-					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					const toolDef = tools.find((t: any) => t.name === name);
 					if (toolDef && toolDef.run) {
 						try {
@@ -217,10 +200,7 @@ async function streamAiResponse(
 		}
 	}
 
-	// Final streaming part
-	 
 	const response = await env.AI.run(
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		model as any,
 		{
 			messages: fullResponse
@@ -232,7 +212,6 @@ async function streamAiResponse(
 	);
 
 	if (!(response instanceof ReadableStream)) {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const data = response as any;
 		const content = data.response || data.choices?.[0]?.message?.content || '';
 		await bot.reply(await markdownToHtml(content), 'HTML');
@@ -246,17 +225,19 @@ async function streamAiResponse(
 	let messageId: number | undefined;
 	let buffer = '';
 
-	// Send initial placeholder to get messageId
 	const res = await bot.reply('<i>Thinking...</i>', 'HTML');
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const json = (await res.json()) as any;
-	if (json.ok && json.result?.message_id) {
-		messageId = json.result.message_id;
+	if (res && res.status === 200) {
+		const json = (await res.json()) as any;
+		if (json.ok && json.result?.message_id) {
+			messageId = json.result.message_id;
+		}
 	}
 
 	for (;;) {
 		const { done, value } = await reader.read();
-		if (done) {break;}
+		if (done) {
+			break;
+		}
 
 		buffer += decoder.decode(value, { stream: true });
 		const lines = buffer.split('\n');
@@ -264,11 +245,12 @@ async function streamAiResponse(
 
 		for (const line of lines) {
 			const trimmedLine = line.trim();
-			if (!trimmedLine || trimmedLine === 'data: [DONE]') {continue;}
+			if (!trimmedLine || trimmedLine === 'data: [DONE]') {
+				continue;
+			}
 
 			if (trimmedLine.startsWith('data: ')) {
 				try {
-					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					const data = JSON.parse(trimmedLine.slice(6)) as any;
 					const content = data.choices?.[0]?.delta?.content ?? data.response ?? '';
 
@@ -295,11 +277,9 @@ async function streamAiResponse(
 		}
 	}
 
-	// Final full reply
 	const finalHtml = await markdownToHtml(streamContent);
 	await bot.reply(finalHtml, 'HTML');
 
-	// Delete placeholder
 	if (messageId) {
 		try {
 			await bot.api.deleteMessage(bot.bot.api.toString(), {
@@ -315,7 +295,7 @@ async function streamAiResponse(
 }
 
 export default {
-	async fetch(request: Request, env: Environment): Promise<Response> {
+	async fetch(request: Request, env: Env): Promise<Response> {
 		if (request.method === 'POST') {
 			try {
 				const task = (await request.json()) as Task;

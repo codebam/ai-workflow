@@ -1,0 +1,14 @@
+{
+	"name": "ai-workflow-worker",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"devDependencies": {
+		"typescript": "^6.0.2",
+		"wrangler": "^4.81.0"
+	},
+	"dependencies": {
+		"@codebam/cf-workers-telegram-bot": "^11.6.1",
+		"marked": "^18.0.3"
+	}
+}
