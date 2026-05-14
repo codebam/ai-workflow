@@ -247,9 +247,12 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	const tools = input.tools || [];
 
 	const cfTools = tools.map((t: any) => ({
-		name: t.name,
-		description: t.description,
-		parameters: t.parameters
+		type: 'function',
+		function: {
+			name: t.name,
+			description: t.description,
+			parameters: t.parameters
+		}
 	}));
 
 	if (cfTools.length === 0) {
