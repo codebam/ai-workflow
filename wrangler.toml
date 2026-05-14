@@ -2,9 +2,6 @@ name = "ai-workflow"
 main = "src/index.ts"
 compatibility_date = "2024-11-18"
 
-[vars]
-SECRET_TELEGRAM_API_TOKEN = ""
-
 [ai]
 binding = "AI"
 

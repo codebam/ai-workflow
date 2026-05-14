@@ -12,6 +12,7 @@ export interface Task {
 	modelId?: string;
 	fileId?: string;
 	systemPrompt?: string;
+	telegramToken?: string;
 	tools?: any[];
 }
 
@@ -20,15 +21,21 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		const task = event.payload;
 		const env = this.env;
 
-		const bot = new TelegramBot(env.SECRET_TELEGRAM_API_TOKEN);
+		const token = task.telegramToken || (env as any).SECRET_TELEGRAM_API_TOKEN;
+		if (!token) {
+			throw new Error('Telegram token missing in task and environment');
+		}
+
+		const bot = new TelegramBot(token);
 		const dummyUpdate = {
 			update_id: 0,
 			message: {
 				message_id: 0,
 				from: { id: task.userId || 0, is_bot: false, first_name: 'User' },
 				chat: { id: task.userId || 0, type: 'private' },
-				date: Date.now() / 1000,
-				text: task.prompt
+				date: Math.floor(Date.now() / 1000),
+				text: task.prompt,
+				message_thread_id: task.threadId
 			}
 		};
 		const tctx = new TelegramExecutionContext(bot, dummyUpdate as any);
