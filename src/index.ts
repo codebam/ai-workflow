@@ -244,15 +244,12 @@ const fetchTool = {
 
 async function customRunWithTools(ai: any, model: string, input: any, config: any) {
 	const messages = [...input.messages];
-	const tools = input.tools || [];
-
-	const cfTools = tools.map((t: any) => ({
-		type: 'function',
-		function: {
-			name: t.name,
-			description: t.description,
-			parameters: t.parameters
-		}
+	
+	// FIX 1: Cloudflare requires a flat array of tools, no 'type: function' wrapper
+	const cfTools = (input.tools || []).map((t: any) => ({
+		name: t.name,
+		description: t.description,
+		parameters: t.parameters
 	}));
 
 	if (cfTools.length === 0) {
@@ -269,15 +266,16 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	}) as any;
 
 	if (response && response.tool_calls && response.tool_calls.length > 0) {
-		messages.push({ role: 'assistant', content: response.response || '', tool_calls: response.tool_calls });
+		const originalTools = input.tools || [];
 		
 		for (const call of response.tool_calls) {
-			// Safely extract from Cloudflare's nested format
-			const toolName = call.name || (call.function && call.function.name);
-			let toolArgs = call.arguments || (call.function && call.function.arguments);
-			
-			const tool = tools.find((t: any) => t.name === toolName);
-			
+			// FIX 2: Cloudflare expects the assistant message content to be the stringified tool object
+			messages.push({ role: 'assistant', content: JSON.stringify(call) });
+
+			const toolName = call.name;
+			let toolArgs = call.arguments;
+			const tool = originalTools.find((t: any) => t.name === toolName);
+
 			if (tool && tool.function) {
 				try {
 					let parsedArgs = toolArgs;
@@ -285,18 +283,19 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 						try { parsedArgs = JSON.parse(parsedArgs); } catch(e) { /* ignore */ }
 					}
 					const result = await tool.function(parsedArgs);
-					// STRICT FORMAT: Cloudflare 500s if you include an ID here
-					messages.push({ role: 'tool', name: toolName, content: String(result) });
+					// FIX 3: Cloudflare expects the tool response to be pure content, no name or ID
+					messages.push({ role: 'tool', content: String(result) });
 				} catch (e) {
-					messages.push({ role: 'tool', name: toolName, content: String(e) });
+					messages.push({ role: 'tool', content: String(e) });
 				}
 			} else {
-				messages.push({ role: 'tool', name: toolName || 'unknown', content: 'Tool not found' });
+				messages.push({ role: 'tool', content: 'Tool not found' });
 			}
 		}
 		
 		return await ai.run(model, {
 			messages,
+			tools: cfTools,
 			stream: config.streamFinalResponse
 		});
 	}
