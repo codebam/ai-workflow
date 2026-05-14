@@ -269,10 +269,10 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	}) as any;
 
 	if (response && response.tool_calls && response.tool_calls.length > 0) {
+		messages.push({ role: 'assistant', content: response.response || '', tool_calls: response.tool_calls });
 		for (const call of response.tool_calls) {
 			const tool = tools.find((t: any) => t.name === call.name);
 			if (tool && tool.function) {
-				messages.push({ role: 'assistant', content: JSON.stringify(call) });
 				try {
 					const result = await tool.function(call.arguments);
 					messages.push({ role: 'tool', name: call.name, content: String(result) });
