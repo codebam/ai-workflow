@@ -1,0 +1,19 @@
+name = "ai-workflow-worker"
+main = "src/index.ts"
+compatibility_date = "2025-06-04"
+
+[ai]
+binding = "AI"
+
+[[kv_namespaces]]
+binding = "CONVERSATION_HISTORY"
+id = "7c147881ce7d42b8811bfbf8c38e3ee4"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "share"
+
+[[workflows]]
+name = "ai-workflow"
+binding = "AI_WORKFLOW"
+class_name = "AIWorkflow"
