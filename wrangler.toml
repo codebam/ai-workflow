@@ -21,6 +21,9 @@ class_name = "AIWorkflow"
 [env.development]
 name = "ai-workflow-dev"
 
+[env.development.ai]
+binding = "AI"
+
 [[env.development.kv_namespaces]]
 binding = "CONVERSATION_HISTORY"
 id = "7c147881ce7d42b8811bfbf8c38e3ee4" # TODO: Change to a dev KV ID if desired
