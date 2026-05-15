@@ -254,8 +254,9 @@ async function streamAiResponseToTelegram(
 	messages: any[],
 	task: Task
 ): Promise<string> {
-	// Send an initial draft to show we're thinking
 	const draftId = task.updateId || 0;
+	
+	// Send initial placeholder immediately
 	await bot.streamReply('...', draftId, 'HTML');
 
 	const aiResponse = await customRunWithTools(
@@ -283,22 +284,7 @@ async function streamAiResponseToTelegram(
 	const decoder = new TextDecoder();
 	let streamContent = '';
 	let buffer = '';
-	let streamFinished = false;
-	let lastReportedContent = '';
-
-	// Start a non-blocking reporter loop
-	const reporter = (async () => {
-		while (!streamFinished) {
-			if (streamContent !== lastReportedContent && streamContent.trim()) {
-				const html = await markdownToHtml(streamContent);
-				if (html !== lastReportedContent) {
-					await bot.streamReply(html, draftId, 'HTML');
-					lastReportedContent = html;
-				}
-			}
-			await new Promise((r) => setTimeout(r, 1000));
-		}
-	})();
+	let lastUpdate = Date.now();
 
 	try {
 		for (;;) {
@@ -318,18 +304,25 @@ async function streamAiResponseToTelegram(
 						const data = JSON.parse(trimmedLine.slice(6));
 						streamContent += extractText(data);
 					} catch {
-						streamContent += trimmedLine.slice(6);
+						// ignore parse errors for partial chunks
 					}
 				} else {
 					streamContent += trimmedLine;
 				}
 			}
+
+			// Update Telegram every 1200ms, but don't block the AI stream
+			if (Date.now() - lastUpdate > 1200 && streamContent.trim()) {
+				const currentContent = streamContent;
+				bot.streamReply(await markdownToHtml(currentContent + '...'), draftId, 'HTML').catch(e => console.error('Streaming error:', e));
+				lastUpdate = Date.now();
+			}
 		}
-	} finally {
-		streamFinished = true;
-		await reporter;
+	} catch (e) {
+		console.error('Error reading AI stream:', e);
 	}
 
+	// Send final response (blocking)
 	await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML', {}, true);
 
 	return streamContent;
