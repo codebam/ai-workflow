@@ -284,14 +284,14 @@ async function streamAiResponseToTelegram(
 
 	await bot.sendTyping();
 
-	for (;;) {
+		for (;;) {
 		const { done, value } = await reader.read();
 		if (done) {
 			break;
 		}
-buffer += decoder.decode(value, { stream: true });
-const lines = buffer.split('\n');
-buffer = lines.pop() ?? '';
+		buffer += decoder.decode(value, { stream: true });
+		const lines = buffer.split('\n');
+		buffer = lines.pop() ?? '';
 
 		for (const line of lines) {
 			const trimmedLine = line.trim();
@@ -303,21 +303,17 @@ buffer = lines.pop() ?? '';
 				const dataStr = trimmedLine.slice(6);
 				try {
 					const data = JSON.parse(dataStr) as any;
-					const content = extractText(data);
-
-					if (content) {
-						streamContent += content;
-
-						if (Date.now() - lastUpdate > 500) {
-							await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML');
-							lastUpdate = Date.now();
-						}
-					}
+					streamContent += extractText(data);
 				} catch {
-					if (dataStr && dataStr !== '[DONE]') {
-						streamContent += dataStr;
-					}
+					streamContent += dataStr;
 				}
+			} else {
+				streamContent += trimmedLine;
+			}
+
+			if (Date.now() - lastUpdate > 500 && streamContent.trim()) {
+				await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML');
+				lastUpdate = Date.now();
 			}
 		}
 	}
