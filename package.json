@@ -9,7 +9,7 @@
 	},
 	"dependencies": {
 		"@cloudflare/ai-utils": "^1.0.1",
-		"@codebam/cf-workers-telegram-bot": "^11.18.0-nightly.4228c7b",
+		"@codebam/cf-workers-telegram-bot": "^11.18.0-nightly.f012841",
 		"marked": "^18.0.3"
 	}
 }
