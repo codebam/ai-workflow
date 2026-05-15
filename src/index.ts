@@ -1,7 +1,5 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
-import { TelegramBot, TelegramExecutionContext } from '@codebam/cf-workers-telegram-bot';
-import { marked } from 'marked';
+import { TelegramBot, TelegramExecutionContext, markdownToHtml, fetchTool, PartialTelegramUpdate } from '@codebam/cf-workers-telegram-bot';
 
 export interface Task {
 	type: 'code' | 'message' | 'business_message' | 'photo' | 'gen_photo' | 'voice' | 'tool_call';
@@ -18,7 +16,7 @@ export interface Task {
 	fileId?: string;
 	systemPrompt?: string;
 	telegramToken?: string;
-	tools?: any[];
+	tools?: Record<string, unknown>[];
 	stream?: boolean;
 }
 
@@ -27,13 +25,13 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		const task = event.payload;
 		const env = this.env;
 
-		const token = task.telegramToken || (env as any).SECRET_TELEGRAM_API_TOKEN;
+		const token = task.telegramToken || (env as unknown as { SECRET_TELEGRAM_API_TOKEN: string }).SECRET_TELEGRAM_API_TOKEN;
 		if (!token) {
 			throw new Error('Telegram token missing in task and environment');
 		}
 
 		const bot = new TelegramBot(token);
-		const dummyUpdate: any = {
+		const dummyUpdate: PartialTelegramUpdate = {
 			update_id: 0
 		};
 
@@ -43,36 +41,36 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		if (task.updateType === 'guest_message') {
 			dummyUpdate.guest_message = {
 				message_id: 0,
-				from: { id: senderId, is_bot: false, first_name: 'User' },
-				chat: { id: chatId, type: 'private' },
+				from: { id: senderId, is_bot: false, first_name: 'User' } as unknown as any,
+				chat: { id: chatId, type: 'private' } as unknown as any,
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
-				guest_query_id: task.guestQueryId
+				guest_query_id: task.guestQueryId || ''
 			};
 		} else if (task.updateType === 'business_message') {
 			dummyUpdate.business_message = {
 				message_id: 0,
-				from: { id: senderId, is_bot: false, first_name: 'User' },
-				chat: { id: chatId, type: 'private' },
+				from: { id: senderId, is_bot: false, first_name: 'User' } as unknown as any,
+				chat: { id: chatId, type: 'private' } as unknown as any,
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
-				business_connection_id: task.businessConnectionId
+				business_connection_id: task.businessConnectionId || ''
 			};
 		} else {
 			dummyUpdate.message = {
 				message_id: 0,
-				from: { id: senderId, is_bot: false, first_name: 'User' },
-				chat: { id: chatId, type: 'private' },
+				from: { id: senderId, is_bot: false, first_name: 'User' } as unknown as any,
+				chat: { id: chatId, type: 'private' } as unknown as any,
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
 				message_thread_id: task.threadId
 			};
 		}
-		const tctx = new TelegramExecutionContext(bot, dummyUpdate as any);
+		const tctx = new TelegramExecutionContext(bot, dummyUpdate as unknown as any);
 
 		await step.do('process-ai-task', async () => {
 			try {
-				const messages: any[] = [
+				const messages: Record<string, any>[] = [
 					{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
 					...(task.history || []),
 					{ role: 'user', content: task.prompt }
@@ -90,169 +88,14 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 	}
 }
 
-async function markdownToHtml(s: string): Promise<string> {
-	const parsed = (await marked.parse(s)) as string;
-	const allowedTags = [
-		'b',
-		'strong',
-		'i',
-		'em',
-		'u',
-		'ins',
-		's',
-		'strike',
-		'del',
-		'code',
-		'pre',
-		'a',
-		'blockquote',
-		'span'
-	];
-	const tagStack: string[] = [];
-	let result = '';
-	let i = 0;
 
-	while (i < parsed.length) {
-		if (parsed[i] === '<') {
-			const tagMatch = /^<\/?([a-z1-6]+)(?:\s+[^>]*)?>/i.exec(parsed.slice(i));
-			if (tagMatch) {
-				const fullTag = tagMatch[0];
-				const tagName = tagMatch[1].toLowerCase();
-				const isClosing = fullTag.startsWith('</');
 
-				if (allowedTags.includes(tagName)) {
-					if (isClosing) {
-						if (tagStack.includes(tagName)) {
-							while (tagStack.length > 0) {
-								const top = tagStack.pop();
-								if (top) {
-									result += `</${top}>`;
-									if (top === tagName) {
-										break;
-									}
-								}
-							}
-						}
-					} else {
-						tagStack.push(tagName);
-						if (tagName === 'a') {
-							const hrefMatch = /href="([^"]*)"/i.exec(fullTag);
-							result += hrefMatch ? `<a href="${hrefMatch[1]}">` : '<a>';
-						} else {
-							result += `<${tagName}>`;
-						}
-					}
-					i += fullTag.length;
-					continue;
-				} else if (tagName === 'p') {
-					if (isClosing) {
-						result += '\n\n';
-					}
-					i += fullTag.length;
-					continue;
-				} else if (tagName === 'br') {
-					result += '\n';
-					i += fullTag.length;
-					continue;
-				} else if (tagName === 'li') {
-					if (!isClosing) {
-						result += '• ';
-					} else {
-						result += '\n';
-					}
-					i += fullTag.length;
-					continue;
-				} else if (/^h[1-6]$/.test(tagName)) {
-					if (isClosing) {
-						result += '</b>\n\n';
-					} else {
-						result += '<b>';
-					}
-					i += fullTag.length;
-					continue;
-				} else {
-					i += fullTag.length;
-					continue;
-				}
-			}
-		}
-
-		if (parsed[i] === '<') {
-			result += '&lt;';
-		} else if (parsed[i] === '>') {
-			result += '&gt;';
-		} else if (parsed[i] === '&') {
-			const entityMatch = /^&[a-z0-9#]+;/i.exec(parsed.slice(i));
-			if (entityMatch) {
-				result += entityMatch[0];
-				i += entityMatch[0].length;
-				continue;
-			}
-			result += '&amp;';
-		} else {
-			result += parsed[i];
-		}
-		i++;
-	}
-
-	while (tagStack.length > 0) {
-		const top = tagStack.pop();
-		if (top) {
-			result += `</${top}>`;
-		}
-	}
-
-	return result.trim();
-}
-
-const fetchTool = {
-	name: 'fetch',
-	description:
-		'Make an HTTP request to fetch a website or API, returning the HTML or JSON. You MUST use this tool when the user asks to fetch a URL, visit a website, or make a GET request, instead of writing code.',
-	parameters: {
-		type: 'object',
-		properties: {
-			url: { type: 'string', description: 'The URL to fetch' },
-			method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], default: 'GET' },
-			headers: { type: 'object', description: 'HTTP headers to include in the request' },
-			body: { type: 'string', description: 'The request body' }
-		},
-		required: ['url']
-	},
-	function: async ({
-		url,
-		method,
-		headers,
-		body
-	}: {
-		url: string;
-		method?: string;
-		headers?: Record<string, string>;
-		body?: string;
-	}) => {
-		try {
-			const res = await fetch(url, {
-				method: method || 'GET',
-				headers: {
-					'User-Agent': 'Mozilla/5.0 (Cloudflare Worker Telegram Bot)',
-					...headers
-				},
-				body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
-			});
-			const text = await res.text();
-			return text.slice(0, 10000);
-		} catch (e) {
-			return `Error executing fetch: ${String(e)}`;
-		}
-	}
-};
-
-async function customRunWithTools(ai: any, model: string, input: any, config: any) {
+async function customRunWithTools(ai: Ai, model: string, input: { messages: Record<string, any>[], tools?: Record<string, any>[] }, config: { streamFinalResponse: boolean }) {
 	const messages = [...input.messages];
 	const tools = input.tools || [];
 	const isGemini = model.includes('google/gemini');
 
-	const cfTools = tools.map((t: any) => ({
+	const cfTools = tools.map((t: Record<string, any>) => ({
 		type: 'function',
 		function: {
 			name: t.name,
@@ -265,7 +108,7 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 		if (isGemini) {
 			const systemMessage = msgs.find((m) => m.role === 'system');
 			const otherMessages = msgs.filter((m) => m.role !== 'system');
-			const geminiInput: any = {
+			const geminiInput: Record<string, any> = {
 				contents: otherMessages.map((m) => ({
 					role: m.role === 'assistant' ? 'model' : 'user',
 					parts: [{ text: m.content }]
@@ -286,10 +129,10 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 		return await runModel(messages, config.streamFinalResponse);
 	}
 
-	const response = (await runModel(messages, false)) as any;
+	const response = (await runModel(messages, false)) as Record<string, any>;
 
 	// FIX: Robustly extract from BOTH Cloudflare formats (Standard and OpenAI-compatible)
-	let toolCalls = [];
+	let toolCalls: any[] = [];
 	if (response?.tool_calls) {
 		toolCalls = [...response.tool_calls];
 	} else if (response?.choices?.[0]?.message?.tool_calls) {
@@ -323,7 +166,7 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	}
 
 	if (toolCalls.length > 0) {
-		const normalizedToolCalls = toolCalls.map((call: any, index: number) => {
+		const normalizedToolCalls = toolCalls.map((call: Record<string, any>, index: number) => {
 			const name = call.name || (call.function && call.function.name);
 			let args = call.arguments || (call.function && call.function.arguments);
 			if (typeof args !== 'string') {
