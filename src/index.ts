@@ -257,7 +257,7 @@ async function streamAiResponseToTelegram(
 	const draftId = task.updateId || 0;
 	
 	// Send initial placeholder immediately
-	await bot.streamReply('...', draftId, 'HTML');
+	if (bot.update_type !== 'guest_message') { await bot.streamReply('...', draftId, 'HTML'); }
 
 	const aiResponse = await customRunWithTools(
 		env.AI as any,
