@@ -376,6 +376,37 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 	return response;
 }
 
+/**
+ * Robustly extract text from various AI response formats.
+ * Handles OpenAI, Cloudflare, and Google Gemini structures.
+ */
+function extractText(obj: any): string {
+	if (typeof obj === 'string') return obj;
+	if (typeof obj !== 'object' || obj === null) return '';
+
+	// Direct fields
+	if (typeof obj.response === 'string') return obj.response;
+	if (typeof obj.text === 'string') return obj.text;
+	if (typeof obj.content === 'string') return obj.content;
+	if (typeof obj.delta === 'string') return obj.delta;
+
+	// Nested fields
+	if (obj.choices && Array.isArray(obj.choices) && obj.choices.length > 0) {
+		return extractText(obj.choices[0]);
+	}
+	if (obj.message) return extractText(obj.message);
+	if (obj.delta) return extractText(obj.delta);
+	if (obj.candidates && Array.isArray(obj.candidates) && obj.candidates.length > 0) {
+		return extractText(obj.candidates[0]);
+	}
+	if (obj.content) return extractText(obj.content);
+	if (obj.parts && Array.isArray(obj.parts) && obj.parts.length > 0) {
+		return extractText(obj.parts[0]);
+	}
+
+	return '';
+}
+
 async function streamAiResponseToTelegram(
 	bot: TelegramExecutionContext,
 	env: Env,
@@ -396,13 +427,9 @@ async function streamAiResponseToTelegram(
 	);
 
 	if (!(aiResponse instanceof ReadableStream)) {
-		const content =
-			(aiResponse as any).response ||
-			(aiResponse as any).choices?.[0]?.message?.content ||
-			(aiResponse as any).candidates?.[0]?.content?.parts?.[0]?.text ||
-			'';
+		const content = extractText(aiResponse);
 		if (!content.trim()) {
-			throw new Error('AI returned an empty response');
+			throw new Error(`AI returned an empty response. Response structure: ${JSON.stringify(aiResponse)}`);
 		}
 		await bot.reply(await markdownToHtml(content), 'HTML');
 		return content;
@@ -434,13 +461,10 @@ async function streamAiResponseToTelegram(
 			}
 
 			if (trimmedLine.startsWith('data: ')) {
+				const dataStr = trimmedLine.slice(6);
 				try {
-					const data = JSON.parse(trimmedLine.slice(6)) as any;
-					const content =
-						data.choices?.[0]?.delta?.content ??
-						data.response ??
-						data.candidates?.[0]?.content?.parts?.[0]?.text ??
-						'';
+					const data = JSON.parse(dataStr) as any;
+					const content = extractText(data);
 
 					if (content) {
 						streamContent += content;
@@ -470,7 +494,10 @@ async function streamAiResponseToTelegram(
 						}
 					}
 				} catch {
-					/* ignore */
+					// Fallback for raw text chunks
+					if (dataStr && dataStr !== '[DONE]') {
+						streamContent += dataStr;
+					}
 				}
 			}
 		}
