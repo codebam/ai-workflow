@@ -309,7 +309,7 @@ buffer = lines.pop() ?? '';
 						streamContent += content;
 
 						if (Date.now() - lastUpdate > 500) {
-							bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML').catch(console.error);
+							await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML');
 							lastUpdate = Date.now();
 						}
 					}
