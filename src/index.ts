@@ -122,7 +122,7 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 		return await ai.run(model, { messages: msgs, tools: cfTools.length > 0 ? cfTools : undefined, stream });
 	};
 
-	if (cfTools.length === 0 || isGemini) {
+	if (cfTools.length === 0 || isGemini || config.streamFinalResponse) {
 		return await runModel(messages, config.streamFinalResponse);
 	}
 
@@ -295,26 +295,26 @@ async function streamAiResponseToTelegram(
 
 		for (const line of lines) {
 			const trimmedLine = line.trim();
-			if (!trimmedLine || trimmedLine === 'data: [DONE]') {
+			if (trimmedLine === 'data: [DONE]') {
 				continue;
 			}
 
 			if (trimmedLine.startsWith('data: ')) {
 				const dataStr = trimmedLine.slice(6);
 				try {
-					const data = JSON.parse(dataStr) as any;
+					const data = JSON.parse(dataStr);
 					streamContent += extractText(data);
 				} catch {
 					streamContent += dataStr;
 				}
-			} else {
+			} else if (trimmedLine) {
 				streamContent += trimmedLine;
 			}
+		}
 
-			if (Date.now() - lastUpdate > 500 && streamContent.trim()) {
-				await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML');
-				lastUpdate = Date.now();
-			}
+		if (Date.now() - lastUpdate > 500 && streamContent.trim()) {
+			await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML');
+			lastUpdate = Date.now();
 		}
 	}
 
