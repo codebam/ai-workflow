@@ -4,6 +4,7 @@ import { TelegramBot, TelegramExecutionContext, markdownToHtml, fetchTool, Parti
 export interface Task {
 	type: 'code' | 'message' | 'business_message' | 'photo' | 'gen_photo' | 'voice' | 'tool_call';
 	updateType?: string;
+	updateId?: number;
 	guestQueryId?: string;
 	businessConnectionId?: string;
 	prompt: string;
@@ -272,7 +273,7 @@ async function streamAiResponseToTelegram(
 	if (!(aiResponse instanceof ReadableStream)) {
 		const content = extractText(aiResponse);
 		if (!content.trim()) {
-			throw new Error(`AI returned an empty response. Response structure: ${JSON.stringify(aiResponse)}`);
+			throw new Error('AI returned an empty response');
 		}
 		await bot.reply(await markdownToHtml(content), 'HTML');
 		return content;
@@ -282,8 +283,8 @@ async function streamAiResponseToTelegram(
 	const decoder = new TextDecoder();
 	let streamContent = '';
 	let lastUpdate = 0;
-	let messageId: number | undefined;
 	let buffer = '';
+	const draftId = task.updateId || 0;
 
 	await bot.sendTyping();
 
@@ -294,7 +295,8 @@ async function streamAiResponseToTelegram(
 		}
 
 		buffer += decoder.decode(value, { stream: true });
-		const lines = buffer.split('\n');
+		const lines = buffer.split('
+');
 		buffer = lines.pop() ?? '';
 
 		for (const line of lines) {
@@ -312,32 +314,12 @@ async function streamAiResponseToTelegram(
 					if (content) {
 						streamContent += content;
 
-						if (!messageId && streamContent.trim() && bot.update_type !== 'guest_message') {
-							const res = await bot.reply(await markdownToHtml(streamContent), 'HTML');
-							if (res && res.status === 200) {
-								const json = (await res.json()) as any;
-								if (json.ok && json.result?.message_id) {
-									messageId = json.result.message_id;
-									lastUpdate = Date.now();
-								}
-							}
-						} else if (messageId && Date.now() - lastUpdate > 1500) {
-							try {
-								await bot.api.editMessageText(bot.bot.api.toString(), {
-									chat_id: bot.chatId,
-									message_id: messageId,
-									text: await markdownToHtml(streamContent + '...'),
-									parse_mode: 'HTML',
-									business_connection_id: bot.update.business_message?.business_connection_id
-								});
-							} catch {
-								/* ignore */
-							}
+						if (Date.now() - lastUpdate > 1500) {
+							await bot.streamReply(await markdownToHtml(streamContent + '...'), draftId, 'HTML');
 							lastUpdate = Date.now();
 						}
 					}
 				} catch {
-					// Fallback for raw text chunks
 					if (dataStr && dataStr !== '[DONE]') {
 						streamContent += dataStr;
 					}
@@ -346,23 +328,7 @@ async function streamAiResponseToTelegram(
 		}
 	}
 
-	const finalHtml = await markdownToHtml(streamContent);
-
-	if (messageId) {
-		try {
-			await bot.api.editMessageText(bot.bot.api.toString(), {
-				chat_id: bot.chatId,
-				message_id: messageId,
-				text: finalHtml,
-				parse_mode: 'HTML',
-				business_connection_id: bot.update.business_message?.business_connection_id
-			});
-		} catch {
-			await bot.reply(finalHtml, 'HTML');
-		}
-	} else {
-		await bot.reply(finalHtml, 'HTML');
-	}
+	await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML', {}, true);
 
 	return streamContent;
 }
