@@ -250,6 +250,7 @@ const fetchTool = {
 async function customRunWithTools(ai: any, model: string, input: any, config: any) {
 	const messages = [...input.messages];
 	const tools = input.tools || [];
+	const isGemini = model.includes('google/gemini');
 
 	const cfTools = tools.map((t: any) => ({
 		type: 'function',
@@ -260,15 +261,32 @@ async function customRunWithTools(ai: any, model: string, input: any, config: an
 		}
 	}));
 
-	if (cfTools.length === 0) {
-		return await ai.run(model, { messages, stream: config.streamFinalResponse });
+	const runModel = async (msgs: any[], stream: boolean) => {
+		if (isGemini) {
+			const systemMessage = msgs.find((m) => m.role === 'system');
+			const otherMessages = msgs.filter((m) => m.role !== 'system');
+			const geminiInput: any = {
+				contents: otherMessages.map((m) => ({
+					role: m.role === 'assistant' ? 'model' : 'user',
+					parts: [{ text: m.content }]
+				})),
+				stream
+			};
+			if (systemMessage) {
+				geminiInput.system_instruction = {
+					parts: [{ text: systemMessage.content }]
+				};
+			}
+			return await ai.run(model, geminiInput);
+		}
+		return await ai.run(model, { messages: msgs, tools: cfTools.length > 0 ? cfTools : undefined, stream });
+	};
+
+	if (cfTools.length === 0 || isGemini) {
+		return await runModel(messages, config.streamFinalResponse);
 	}
 
-	const response = await ai.run(model, {
-		messages,
-		tools: cfTools,
-		stream: false
-	}) as any;
+	const response = (await runModel(messages, false)) as any;
 
 	// FIX: Robustly extract from BOTH Cloudflare formats (Standard and OpenAI-compatible)
 	let toolCalls = [];
