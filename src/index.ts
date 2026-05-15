@@ -254,6 +254,10 @@ async function streamAiResponseToTelegram(
 	messages: any[],
 	task: Task
 ): Promise<string> {
+	// Send an initial draft to show we're thinking
+	const draftId = task.updateId || 0;
+	await bot.streamReply('...', draftId, 'HTML');
+
 	const aiResponse = await customRunWithTools(
 		env.AI as any,
 		model as any,
@@ -278,44 +282,52 @@ async function streamAiResponseToTelegram(
 	const reader = aiResponse.getReader();
 	const decoder = new TextDecoder();
 	let streamContent = '';
-	let lastUpdate = 0;
 	let buffer = '';
-	const draftId = task.updateId || 0;
+	let streamFinished = false;
+	let lastReportedContent = '';
 
-	await bot.sendTyping();
-
-		for (;;) {
-		const { done, value } = await reader.read();
-		if (done) {
-			break;
-		}
-		buffer += decoder.decode(value, { stream: true });
-		const lines = buffer.split('\n');
-		buffer = lines.pop() ?? '';
-
-		for (const line of lines) {
-			const trimmedLine = line.trim();
-			if (trimmedLine === 'data: [DONE]') {
-				continue;
-			}
-
-			if (trimmedLine.startsWith('data: ')) {
-				const dataStr = trimmedLine.slice(6);
-				try {
-					const data = JSON.parse(dataStr);
-					streamContent += extractText(data);
-				} catch {
-					streamContent += dataStr;
+	// Start a non-blocking reporter loop
+	const reporter = (async () => {
+		while (!streamFinished) {
+			if (streamContent !== lastReportedContent && streamContent.trim()) {
+				const html = await markdownToHtml(streamContent);
+				if (html !== lastReportedContent) {
+					await bot.streamReply(html, draftId, 'HTML');
+					lastReportedContent = html;
 				}
-			} else if (trimmedLine) {
-				streamContent += trimmedLine;
+			}
+			await new Promise((r) => setTimeout(r, 1000));
+		}
+	})();
+
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split('\n');
+			buffer = lines.pop() ?? '';
+
+			for (const line of lines) {
+				const trimmedLine = line.trim();
+				if (!trimmedLine || trimmedLine === 'data: [DONE]') continue;
+
+				if (trimmedLine.startsWith('data: ')) {
+					try {
+						const data = JSON.parse(trimmedLine.slice(6));
+						streamContent += extractText(data);
+					} catch {
+						streamContent += trimmedLine.slice(6);
+					}
+				} else {
+					streamContent += trimmedLine;
+				}
 			}
 		}
-
-		if (Date.now() - lastUpdate > 500 && streamContent.trim()) {
-			await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML');
-			lastUpdate = Date.now();
-		}
+	} finally {
+		streamFinished = true;
+		await reporter;
 	}
 
 	await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML', {}, true);
