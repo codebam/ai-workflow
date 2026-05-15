@@ -122,7 +122,7 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 		return await ai.run(model, { messages: msgs, tools: cfTools.length > 0 ? cfTools : undefined, stream });
 	};
 
-	if (cfTools.length === 0 || isGemini || config.streamFinalResponse) {
+	if (cfTools.length === 0 || isGemini) {
 		return await runModel(messages, config.streamFinalResponse);
 	}
 
@@ -138,17 +138,18 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 
 	let responseText = response?.response || response?.choices?.[0]?.message?.content || '';
 
-	// GEMMA FALLBACK: Catch raw tokens if native interception fails
-	if (toolCalls.length === 0 && responseText.includes('<|tool_call>')) {
-		// Use [\s\S]*? to safely match across multiple lines if Gemma formats the JSON nicely
+	// GEMMA/LLAMA FALLBACK: Catch raw tokens if native interception fails
+	if (toolCalls.length === 0) {
 		const gemmaRegex = /<\|tool_call>\s*call:\s*([a-zA-Z0-9_]+)([\s\S]*?)<tool_call\|>/g;
+		const standardRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+		
 		let match;
 		while ((match = gemmaRegex.exec(responseText)) !== null) {
 			let name = match[1].trim();
 			if (name === 'http_fetch' || name === 'api_fetch') name = 'fetch'; 
 			
 			let argsString = match[2].trim();
-			// Sanitize Gemma's malformed JSON syntax to ensure JSON.parse doesn't throw
+			// Sanitize malformed JSON syntax
 			argsString = argsString.replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
 								   .replace(/:\s*'([^']*)'/g, ': "$1"');
 			
@@ -158,8 +159,27 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 				function: { name, arguments: argsString }
 			});
 		}
-		// Strip the raw tokens from the visible response so the user never sees them
-		responseText = responseText.replace(/<\|tool_call>[\s\S]*?<tool_call\|>/g, '').trim();
+
+		while ((match = standardRegex.exec(responseText)) !== null) {
+			let content = match[1].trim();
+			try {
+				// Handle both raw JSON and name/args format
+				let parsed = JSON.parse(content.replace(/'/g, '"'));
+				let name = parsed.name || 'fetch';
+				let args = parsed.arguments || parsed;
+				toolCalls.push({
+					id: `call_${Math.random().toString(36).substring(2, 9)}`,
+					type: 'function',
+					function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) }
+				});
+			} catch (e) {
+				console.error('Failed to parse tool call:', content, e);
+			}
+		}
+
+		// Strip the raw tokens from the visible response
+		responseText = responseText.replace(/<\|tool_call>[\s\S]*?<tool_call\|>/g, '')
+								   .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
 	}
 
 	if (toolCalls.length > 0) {
@@ -202,15 +222,11 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 			}
 		}
 		
-		return await ai.run(model, {
-			messages,
-			tools: cfTools,
-			stream: config.streamFinalResponse
-		});
+		return await customRunWithTools(ai, model, { messages, tools }, config);
 	}
 
 	if (config.streamFinalResponse) {
-		return await ai.run(model, { messages, stream: true });
+		return await runModel(messages, true);
 	}
 
 	return response;
