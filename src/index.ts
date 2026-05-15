@@ -22,7 +22,7 @@ export interface Task {
 }
 
 export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
-	async run(event: WorkflowEvent<Task>, step: WorkflowStep) {
+		async run(event: WorkflowEvent<Task>) {
 		const task = event.payload;
 		const env = this.env;
 
@@ -69,26 +69,22 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		}
 		const tctx = new TelegramExecutionContext(bot, dummyUpdate as unknown as any);
 
-		await step.do('process-ai-task', async () => {
-			try {
-				const messages: Record<string, any>[] = [
-					{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
-					...(task.history || []),
-					{ role: 'user', content: task.prompt }
-				];
+		const messages: Record<string, any>[] = [
+			{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
+			...(task.history || []),
+			{ role: 'user', content: task.prompt }
+		];
 
-				const modelId = task.modelId || '@cf/meta/llama-3.1-8b-instruct-fp8';
+		const modelId = task.modelId || '@cf/meta/llama-3.1-8b-instruct-fp8';
 
-				await streamAiResponseToTelegram(tctx, env, modelId, messages, task);
-			} catch (e) {
-				console.error('Error in workflow process-ai-task:', e);
-				await tctx.reply(`Error: ${String(e)}`);
-				throw e;
-			}
-		});
+		try {
+			await streamAiResponseToTelegram(tctx, env, modelId, messages, task);
+		} catch (e) {
+			console.error('Error in workflow execution:', e);
+			await tctx.reply('Error: ' + String(e));
+		}
 	}
 }
-
 
 
 async function customRunWithTools(ai: Ai, model: string, input: { messages: Record<string, any>[], tools?: Record<string, any>[] }, config: { streamFinalResponse: boolean }) {
@@ -293,10 +289,9 @@ async function streamAiResponseToTelegram(
 		if (done) {
 			break;
 		}
-
-		buffer += decoder.decode(value, { stream: true });
-		const lines = buffer.split('\n');
-		buffer = lines.pop() ?? '';
+buffer += decoder.decode(value, { stream: true });
+const lines = buffer.split('\n');
+buffer = lines.pop() ?? '';
 
 		for (const line of lines) {
 			const trimmedLine = line.trim();
@@ -313,8 +308,8 @@ async function streamAiResponseToTelegram(
 					if (content) {
 						streamContent += content;
 
-						if (Date.now() - lastUpdate > 1500) {
-							await bot.streamReply(await markdownToHtml(streamContent + '...'), draftId, 'HTML');
+						if (Date.now() - lastUpdate > 500) {
+							bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML').catch(console.error);
 							lastUpdate = Date.now();
 						}
 					}
