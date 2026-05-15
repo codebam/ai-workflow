@@ -397,7 +397,13 @@ async function streamAiResponseToTelegram(
 
 	if (!(aiResponse instanceof ReadableStream)) {
 		const content =
-			(aiResponse as any).response || (aiResponse as any).choices?.[0]?.message?.content || '';
+			(aiResponse as any).response ||
+			(aiResponse as any).choices?.[0]?.message?.content ||
+			(aiResponse as any).candidates?.[0]?.content?.parts?.[0]?.text ||
+			'';
+		if (!content.trim()) {
+			throw new Error('AI returned an empty response');
+		}
 		await bot.reply(await markdownToHtml(content), 'HTML');
 		return content;
 	}
@@ -430,7 +436,11 @@ async function streamAiResponseToTelegram(
 			if (trimmedLine.startsWith('data: ')) {
 				try {
 					const data = JSON.parse(trimmedLine.slice(6)) as any;
-					const content = data.choices?.[0]?.delta?.content ?? data.response ?? '';
+					const content =
+						data.choices?.[0]?.delta?.content ??
+						data.response ??
+						data.candidates?.[0]?.content?.parts?.[0]?.text ??
+						'';
 
 					if (content) {
 						streamContent += content;
