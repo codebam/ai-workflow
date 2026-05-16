@@ -22,11 +22,30 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 			from: { id: task.userId },
 			reply: async (text: string, options: any = {}) => {
 				const api = new TelegramApi();
-				return await api.sendMessage(`https://api.telegram.org/bot${task.token}`, {
+				return await api.sendMessage(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
 					chat_id: task.chatId,
 					text,
 					parse_mode: options.parse_mode || 'HTML',
 					reply_markup: options.reply_markup,
+				});
+			},
+			streamReply: async (text: string, draft_id: number, parse_mode = '', options: any = {}, finish = false) => {
+				const api = new TelegramApi();
+				if (finish) {
+					return await api.sendMessage(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
+						chat_id: task.chatId,
+						text,
+						parse_mode: parse_mode || 'HTML',
+						reply_markup: options.reply_markup,
+					});
+				}
+				// For streaming updates, we use sendMessageDraft which is supported by the proxy if used
+				return await api.sendMessageDraft(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
+					chat_id: task.chatId,
+					text,
+					parse_mode: parse_mode || 'HTML',
+					draft_id,
+					...options,
 				});
 			},
 		} as unknown as TelegramExecutionContext;
@@ -270,7 +289,7 @@ async function streamAiResponseToTelegram(
 	task: any,
 ): Promise<string> {
 	const botApi = new TelegramApi();
-	const draftResponse = await botApi.sendMessage(`https://api.telegram.org/bot${task.token}`, {
+	const draftResponse = await botApi.sendMessage(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
 		chat_id: task.chatId,
 		text: 'Thinking...',
 		parse_mode: 'HTML',
