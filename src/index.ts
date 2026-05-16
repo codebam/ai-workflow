@@ -287,7 +287,8 @@ async function streamAiResponseToTelegram(
 		text: 'Thinking...',
 		parse_mode: 'HTML',
 	});
-	const draftId = (await draftResponse.json<any>()).result.message_id;
+	const draftJson = (await draftResponse.json()) as { ok: boolean; result: { message_id: number } };
+	const draftId = draftJson.result.message_id;
 
 	let streamContent = '';
 	let lastUpdate = Date.now();
