@@ -1,4 +1,4 @@
-import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
+import { WorkflowEntrypoint, WorkflowEvent } from 'cloudflare:workers';
 import { TelegramBot, TelegramExecutionContext, markdownToHtml, fetchTool, PartialTelegramUpdate, HistoryManager } from '@codebam/cf-workers-telegram-bot';
 
 export interface Task {
@@ -17,7 +17,7 @@ export interface Task {
 	fileId?: string;
 	systemPrompt?: string;
 	telegramToken?: string;
-	tools?: Record<string, unknown>[];
+	tools?: unknown[];
 	stream?: boolean;
 }
 
@@ -42,8 +42,8 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		if (task.updateType === 'guest_message') {
 			dummyUpdate.guest_message = {
 				message_id: 0,
-				from: { id: senderId, is_bot: false, first_name: 'User' } as unknown as any,
-				chat: { id: chatId, type: 'private' } as unknown as any,
+				from: { id: senderId, is_bot: false, first_name: 'User' } as unknown as never,
+				chat: { id: chatId, type: 'private' } as unknown as never,
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
 				guest_query_id: task.guestQueryId || ''
@@ -51,8 +51,8 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		} else if (task.updateType === 'business_message') {
 			dummyUpdate.business_message = {
 				message_id: 0,
-				from: { id: senderId, is_bot: false, first_name: 'User' } as unknown as any,
-				chat: { id: chatId, type: 'private' } as unknown as any,
+				from: { id: senderId, is_bot: false, first_name: 'User' } as unknown as never,
+				chat: { id: chatId, type: 'private' } as unknown as never,
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
 				business_connection_id: task.businessConnectionId || ''
@@ -60,16 +60,16 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		} else {
 			dummyUpdate.message = {
 				message_id: 0,
-				from: { id: senderId, is_bot: false, first_name: 'User' } as unknown as any,
-				chat: { id: chatId, type: 'private' } as unknown as any,
+				from: { id: senderId, is_bot: false, first_name: 'User' } as unknown as never,
+				chat: { id: chatId, type: 'private' } as unknown as never,
 				date: Math.floor(Date.now() / 1000),
 				text: task.prompt,
 				message_thread_id: task.threadId
 			};
 		}
-		const tctx = new TelegramExecutionContext(bot, dummyUpdate as unknown as any);
+		const tctx = new TelegramExecutionContext(bot, dummyUpdate as unknown as never);
 
-		const messages: Record<string, any>[] = [
+		const messages: unknown[] = [
 			{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
 			...(task.history || []),
 			{ role: 'user', content: task.prompt }
@@ -83,7 +83,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 				const historyManager = new HistoryManager(env.CONVERSATION_HISTORY);
 				await historyManager.addMessage(task.userId, task.prompt, content, task.threadId);
 			}
-		} catch (e) {
+		} catch {
 			console.error('Error in workflow execution:', e);
 			try {
 				await tctx.reply('Error: ' + String(e));
@@ -95,12 +95,12 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 }
 
 
-async function customRunWithTools(ai: Ai, model: string, input: { messages: Record<string, any>[], tools?: Record<string, any>[] }, config: { streamFinalResponse: boolean }) {
+async function customRunWithTools(ai: Ai, model: string, input: { messages: unknown[], tools?: unknown[] }, config: { streamFinalResponse: boolean }) {
 	const messages = [...input.messages];
 	const tools = input.tools || [];
 	const isGemini = model.includes('google/gemini');
 
-	const cfTools = tools.map((t: Record<string, any>) => ({
+	const cfTools = tools.map((t: Record<string, unknown>) => ({
 		type: 'function',
 		function: {
 			name: t.name,
@@ -113,7 +113,7 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 		if (isGemini) {
 			const systemMessage = msgs.find((m) => m.role === 'system');
 			const otherMessages = msgs.filter((m) => m.role !== 'system');
-			const geminiInput: Record<string, any> = {
+			const geminiInput: Record<string, unknown> = {
 				contents: otherMessages.map((m) => ({
 					role: m.role === 'assistant' ? 'model' : 'user',
 					parts: [{ text: m.content }]
@@ -134,10 +134,10 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 		return await runModel(messages, config.streamFinalResponse);
 	}
 
-	const response = (await runModel(messages, false)) as Record<string, any>;
+	const response: any = (await runModel(messages, false)) as Record<string, unknown>;
 
 	// FIX: Robustly extract from BOTH Cloudflare formats (Standard and OpenAI-compatible)
-	let toolCalls: any[] = [];
+	let toolCalls: unknown[] = [];
 	if (response?.tool_calls) {
 		toolCalls = [...response.tool_calls];
 	} else if (response?.choices?.[0]?.message?.tool_calls) {
@@ -154,7 +154,7 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 		let match;
 		while ((match = gemmaRegex.exec(responseText)) !== null) {
 			let name = match[1].trim();
-			if (name === 'http_fetch' || name === 'api_fetch') name = 'fetch'; 
+			if (name === 'http_fetch' || name === 'api_fetch') {name = 'fetch';} 
 			
 			let argsString = match[2].trim();
 			// Sanitize malformed JSON syntax
@@ -169,18 +169,18 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 		}
 
 		while ((match = standardRegex.exec(responseText)) !== null) {
-			let content = match[1].trim();
+			const content = match[1].trim();
 			try {
 				// Handle both raw JSON and name/args format
-				let parsed = JSON.parse(content.replace(/'/g, '"'));
-				let name = parsed.name || 'fetch';
-				let args = parsed.arguments || parsed;
+				const parsed = JSON.parse(content.replace(/'/g, '"'));
+				const name = parsed.name || 'fetch';
+				const args = parsed.arguments || parsed;
 				toolCalls.push({
 					id: `call_${Math.random().toString(36).substring(2, 9)}`,
 					type: 'function',
 					function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) }
 				});
-			} catch (e) {
+			} catch {
 				console.error('Failed to parse tool call:', content, e);
 			}
 		}
@@ -191,7 +191,7 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 	}
 
 	if (toolCalls.length > 0) {
-		const normalizedToolCalls = toolCalls.map((call: Record<string, any>, index: number) => {
+		const normalizedToolCalls = toolCalls.map((call: Record<string, unknown>, index: number) => {
 			const name = call.name || (call.function && call.function.name);
 			let args = call.arguments || (call.function && call.function.arguments);
 			if (typeof args !== 'string') {
@@ -222,7 +222,7 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
 					try { parsedArgs = JSON.parse(toolArgsString); } catch(e) { parsedArgs = toolArgsString; }
 					const result = await tool.function(parsedArgs);
 					messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: String(result) });
-				} catch (e) {
+				} catch {
 					messages.push({ role: 'tool', tool_call_id: toolId, name: toolName, content: String(e) });
 				}
 			} else {
@@ -244,26 +244,26 @@ async function customRunWithTools(ai: Ai, model: string, input: { messages: Reco
  * Robustly extract text from various AI response formats.
  * Handles OpenAI, Cloudflare, and Google Gemini structures.
  */
-function extractText(obj: any): string {
-	if (typeof obj === 'string') return obj;
-	if (typeof obj !== 'object' || obj === null) return '';
+function extractText(obj: unknown): string {
+	if (typeof obj === 'string') {return obj;}
+	if (typeof obj !== 'object' || obj === null) {return '';}
 
 	// Direct fields
-	if (typeof obj.response === 'string') return obj.response;
-	if (typeof obj.text === 'string') return obj.text;
-	if (typeof obj.content === 'string') return obj.content;
-	if (typeof obj.delta === 'string') return obj.delta;
+	if (typeof obj.response === 'string') {return obj.response;}
+	if (typeof obj.text === 'string') {return obj.text;}
+	if (typeof obj.content === 'string') {return obj.content;}
+	if (typeof obj.delta === 'string') {return obj.delta;}
 
 	// Nested fields
 	if (obj.choices && Array.isArray(obj.choices) && obj.choices.length > 0) {
 		return extractText(obj.choices[0]);
 	}
-	if (obj.message) return extractText(obj.message);
-	if (obj.delta) return extractText(obj.delta);
+	if (obj.message) {return extractText(obj.message);}
+	if (obj.delta) {return extractText(obj.delta);}
 	if (obj.candidates && Array.isArray(obj.candidates) && obj.candidates.length > 0) {
 		return extractText(obj.candidates[0]);
 	}
-	if (obj.content) return extractText(obj.content);
+	if (obj.content) {return extractText(obj.content);}
 	if (obj.parts && Array.isArray(obj.parts) && obj.parts.length > 0) {
 		return extractText(obj.parts[0]);
 	}
@@ -275,7 +275,7 @@ async function streamAiResponseToTelegram(
 	bot: TelegramExecutionContext,
 	env: Env,
 	model: string,
-	messages: any[],
+	messages: unknown[],
 	task: Task
 ): Promise<string> {
 	const draftId = task.updateId || 0;
@@ -284,10 +284,10 @@ async function streamAiResponseToTelegram(
 	if (bot.update_type !== 'guest_message') { await bot.streamReply('...', draftId, 'HTML'); }
 
 	const aiResponse = await customRunWithTools(
-		env.AI as any,
-		model as any,
+		env.AI as never,
+		model as never,
 		{
-			messages: messages as any,
+			messages: messages as never,
 			tools: (task.type === 'tool_call' || (task.tools && task.tools.length > 0)) ? [fetchTool] : []
 		},
 		{
@@ -313,7 +313,7 @@ async function streamAiResponseToTelegram(
 	try {
 		for (;;) {
 			const { done, value } = await reader.read();
-			if (done) break;
+			if (done) {break;}
 
 			buffer += decoder.decode(value, { stream: true });
 			const lines = buffer.split('\n');
@@ -321,7 +321,7 @@ async function streamAiResponseToTelegram(
 
 			for (const line of lines) {
 				const trimmedLine = line.trim();
-				if (!trimmedLine || trimmedLine === 'data: [DONE]') continue;
+				if (!trimmedLine || trimmedLine === 'data: [DONE]') {continue;}
 
 				if (trimmedLine.startsWith('data: ')) {
 					try {
@@ -342,7 +342,7 @@ async function streamAiResponseToTelegram(
 				lastUpdate = Date.now();
 			}
 		}
-	} catch (e) {
+	} catch {
 		console.error('Error reading AI stream:', e);
 	}
 
@@ -359,7 +359,7 @@ export default {
 				const task = (await request.json()) as Task;
 
 				if (task.stream) {
-					const messages: any[] = [
+					const messages: unknown[] = [
 						{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
 						...(task.history || []),
 						{ role: 'user', content: task.prompt }
@@ -368,10 +368,10 @@ export default {
 					const modelId = task.modelId || '@cf/meta/llama-3.1-8b-instruct-fp8';
 
 					const aiResponse = await customRunWithTools(
-						env.AI as any,
-						modelId as any,
+						env.AI as never,
+						modelId as never,
 						{
-							messages: messages as any,
+							messages: messages as never,
 							tools: (task.type === 'tool_call' || (task.tools && task.tools.length > 0)) ? [fetchTool] : []
 						},
 						{
@@ -396,7 +396,7 @@ export default {
 				return new Response(JSON.stringify({ id: instance.id }), {
 					headers: { 'Content-Type': 'application/json' }
 				});
-			} catch (e) {
+			} catch {
 				return new Response(String(e), { status: 500 });
 			}
 		}
