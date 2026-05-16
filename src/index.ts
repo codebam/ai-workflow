@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
-import { TelegramBot, TelegramExecutionContext, markdownToHtml, fetchTool, PartialTelegramUpdate } from '@codebam/cf-workers-telegram-bot';
+import { TelegramBot, TelegramExecutionContext, markdownToHtml, fetchTool, PartialTelegramUpdate, HistoryManager } from '@codebam/cf-workers-telegram-bot';
 
 export interface Task {
 	type: 'code' | 'message' | 'business_message' | 'photo' | 'gen_photo' | 'voice' | 'tool_call';
@@ -78,10 +78,18 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, Task> {
 		const modelId = task.modelId || '@cf/meta/llama-3.1-8b-instruct-fp8';
 
 		try {
-			await streamAiResponseToTelegram(tctx, env, modelId, messages, task);
+			const content = await streamAiResponseToTelegram(tctx, env, modelId, messages, task);
+			if (task.userId && content) {
+				const historyManager = new HistoryManager(env.CONVERSATION_HISTORY);
+				await historyManager.addMessage(task.userId, task.prompt, content, task.threadId);
+			}
 		} catch (e) {
 			console.error('Error in workflow execution:', e);
-			await tctx.reply('Error: ' + String(e));
+			try {
+				await tctx.reply('Error: ' + String(e));
+			} catch (replyError) {
+				console.error('Failed to send error reply to Telegram:', replyError);
+			}
 		}
 	}
 }
