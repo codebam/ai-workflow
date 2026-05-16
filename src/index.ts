@@ -59,27 +59,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 					}
 					return null;
 				}
-				if (finish) {
-					if (draft_id) {
-						return await api.editMessageText(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
-							chat_id: task.chatId,
-							message_id: draft_id,
-							text,
-							parse_mode: parse_mode || 'HTML',
-							reply_markup: options.reply_markup,
-							business_connection_id: task.businessConnectionId,
-						});
-					}
-					return await api.sendMessage(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
-						chat_id: task.chatId,
-						text,
-						parse_mode: parse_mode || 'HTML',
-						reply_markup: options.reply_markup,
-						message_thread_id: task.threadId,
-						business_connection_id: task.businessConnectionId,
-					});
-				}
-				// For streaming updates, we use sendMessageDraft which is supported by the proxy if used
+
 				return await api.sendMessageDraft(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
 					chat_id: task.chatId,
 					text,
@@ -87,6 +67,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 					draft_id,
 					message_thread_id: task.threadId,
 					business_connection_id: task.businessConnectionId,
+					finish,
 					...options,
 				});
 			},
@@ -335,18 +316,19 @@ async function streamAiResponseToTelegram(
 ): Promise<string> {
 	const botApi = new TelegramApi();
 
+	// Use updateId as a stable draftId if available, otherwise generate one
+	const draftId = task.updateId || Date.now();
+
 	// Skip Thinking message for guest messages as they only support one response
-	let draftId: number | undefined;
 	if (task.updateType !== 'guest_message') {
-		const draftResponse = await botApi.sendMessage(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
+		await botApi.sendMessageDraft(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
 			chat_id: task.chatId,
 			text: 'Thinking...',
 			parse_mode: 'HTML',
 			message_thread_id: task.threadId,
 			business_connection_id: task.businessConnectionId,
+			draft_id: draftId,
 		});
-		const draftJson = (await draftResponse.json()) as { ok: boolean; result: { message_id: number } };
-		draftId = draftJson.result?.message_id;
 	}
 
 	let streamContent = '';
@@ -394,7 +376,7 @@ async function streamAiResponseToTelegram(
 				}
 
 				// Update Telegram every 2 seconds to avoid rate limits
-				if (draftId && Date.now() - lastUpdate > 2000 && streamContent.trim()) {
+				if (task.updateType !== 'guest_message' && Date.now() - lastUpdate > 2000 && streamContent.trim()) {
 					const currentContent = streamContent;
 					bot.streamReply(await markdownToHtml(currentContent + '...'), draftId, 'HTML').catch((e) =>
 						console.error('Streaming error:', e),
@@ -412,7 +394,7 @@ async function streamAiResponseToTelegram(
 
 	// Send final response (blocking)
 	if (streamContent.trim()) {
-		await bot.streamReply(await markdownToHtml(streamContent), draftId || 0, 'HTML', {}, true);
+		await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML', {}, true);
 	}
 	return streamContent;
 }
