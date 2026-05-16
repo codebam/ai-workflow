@@ -60,6 +60,16 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 					return null;
 				}
 				if (finish) {
+					if (draft_id) {
+						return await api.editMessageText(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
+							chat_id: task.chatId,
+							message_id: draft_id,
+							text,
+							parse_mode: parse_mode || 'HTML',
+							reply_markup: options.reply_markup,
+							business_connection_id: task.businessConnectionId,
+						});
+					}
 					return await api.sendMessage(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
 						chat_id: task.chatId,
 						text,
