@@ -20,23 +20,53 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 		const tctx = {
 			chat: { id: task.chatId },
 			from: { id: task.userId },
+			update_type: task.updateType,
 			reply: async (text: string, options: any = {}) => {
 				const api = new TelegramApi();
+				if (task.updateType === 'guest_message' && task.guestQueryId) {
+					return await api.answerGuestQuery(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
+						guest_query_id: task.guestQueryId,
+						result: {
+							type: 'article',
+							id: crypto.randomUUID(),
+							title: 'Response',
+							input_message_content: { message_text: text, parse_mode: options.parse_mode || 'HTML' },
+						},
+					});
+				}
 				return await api.sendMessage(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
 					chat_id: task.chatId,
 					text,
 					parse_mode: options.parse_mode || 'HTML',
 					reply_markup: options.reply_markup,
+					message_thread_id: task.threadId,
+					business_connection_id: task.businessConnectionId,
 				});
 			},
 			streamReply: async (text: string, draft_id: number, parse_mode = '', options: any = {}, finish = false) => {
 				const api = new TelegramApi();
+				if (task.updateType === 'guest_message' && task.guestQueryId) {
+					if (finish) {
+						return await api.answerGuestQuery(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
+							guest_query_id: task.guestQueryId,
+							result: {
+								type: 'article',
+								id: crypto.randomUUID(),
+								title: 'Response',
+								input_message_content: { message_text: text, parse_mode: parse_mode || 'HTML' },
+							},
+						});
+					}
+					return null;
+				}
 				if (finish) {
 					return await api.sendMessage(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
 						chat_id: task.chatId,
 						text,
 						parse_mode: parse_mode || 'HTML',
 						reply_markup: options.reply_markup,
+						message_thread_id: task.threadId,
+						business_connection_id: task.businessConnectionId,
 					});
 				}
 				// For streaming updates, we use sendMessageDraft which is supported by the proxy if used
@@ -45,6 +75,8 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 					text,
 					parse_mode: parse_mode || 'HTML',
 					draft_id,
+					message_thread_id: task.threadId,
+					business_connection_id: task.businessConnectionId,
 					...options,
 				});
 			},
@@ -67,7 +99,10 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 		} catch (e) {
 			console.error('Error in workflow execution:', e);
 			try {
-				await tctx.reply('Error: ' + String(e));
+				const errorMsg = 'Error: ' + String(e);
+				if (errorMsg.trim()) {
+					await tctx.reply(errorMsg);
+				}
 			} catch (replyError) {
 				console.error('Failed to send error reply to Telegram:', replyError);
 			}
@@ -289,13 +324,20 @@ async function streamAiResponseToTelegram(
 	task: any,
 ): Promise<string> {
 	const botApi = new TelegramApi();
-	const draftResponse = await botApi.sendMessage(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
-		chat_id: task.chatId,
-		text: 'Thinking...',
-		parse_mode: 'HTML',
-	});
-	const draftJson = (await draftResponse.json()) as { ok: boolean; result: { message_id: number } };
-	const draftId = draftJson.result.message_id;
+
+	// Skip Thinking message for guest messages as they only support one response
+	let draftId: number | undefined;
+	if (task.updateType !== 'guest_message') {
+		const draftResponse = await botApi.sendMessage(`https://api.telegram.org/bot${task.telegramToken || task.token}`, {
+			chat_id: task.chatId,
+			text: 'Thinking...',
+			parse_mode: 'HTML',
+			message_thread_id: task.threadId,
+			business_connection_id: task.businessConnectionId,
+		});
+		const draftJson = (await draftResponse.json()) as { ok: boolean; result: { message_id: number } };
+		draftId = draftJson.result?.message_id;
+	}
 
 	let streamContent = '';
 	let lastUpdate = Date.now();
@@ -311,48 +353,57 @@ async function streamAiResponseToTelegram(
 			{ streamFinalResponse: true },
 		);
 
-		const stream = aiResponse as ReadableStream;
-		const reader = stream.getReader();
-		const decoder = new TextDecoder();
+		if (typeof aiResponse === 'object' && aiResponse !== null && 'getReader' in aiResponse) {
+			const stream = aiResponse as ReadableStream;
+			const reader = stream.getReader();
+			const decoder = new TextDecoder();
 
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) {
-				break;
-			}
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) {
+					break;
+				}
 
-			const chunk = decoder.decode(value, { stream: true });
-			const lines = chunk.split('\n');
+				const chunk = decoder.decode(value, { stream: true });
+				const lines = chunk.split('\n');
 
-			for (const line of lines) {
-				if (line.startsWith('data: ')) {
-					const data = line.slice(6);
-					if (data === '[DONE]') {
-						break;
-					}
-					try {
-						const parsed = JSON.parse(data);
-						const text = extractText(parsed);
-						streamContent += text;
-					} catch {
-						// Ignore malformed JSON chunks
+				for (const line of lines) {
+					if (line.startsWith('data: ')) {
+						const data = line.slice(6);
+						if (data === '[DONE]') {
+							break;
+						}
+						try {
+							const parsed = JSON.parse(data);
+							const text = extractText(parsed);
+							streamContent += text;
+						} catch {
+							// Ignore malformed JSON chunks
+						}
 					}
 				}
-			}
 
-			// Update Telegram every 2 seconds to avoid rate limits
-			if (Date.now() - lastUpdate > 2000 && streamContent.trim()) {
-				const currentContent = streamContent;
-				bot.streamReply(await markdownToHtml(currentContent + '...'), draftId, 'HTML').catch((e) => console.error('Streaming error:', e));
-				lastUpdate = Date.now();
+				// Update Telegram every 2 seconds to avoid rate limits
+				if (draftId && Date.now() - lastUpdate > 2000 && streamContent.trim()) {
+					const currentContent = streamContent;
+					bot.streamReply(await markdownToHtml(currentContent + '...'), draftId, 'HTML').catch((e) =>
+						console.error('Streaming error:', e),
+					);
+					lastUpdate = Date.now();
+				}
 			}
+		} else {
+			// Handle static response
+			streamContent = extractText(aiResponse);
 		}
 	} catch (e) {
 		console.error('Error reading AI stream:', e);
 	}
 
 	// Send final response (blocking)
-	await bot.streamReply(await markdownToHtml(streamContent), draftId, 'HTML', {}, true);
+	if (streamContent.trim()) {
+		await bot.streamReply(await markdownToHtml(streamContent), draftId || 0, 'HTML', {}, true);
+	}
 	return streamContent;
 }
 
