@@ -1,20 +1,8 @@
-import {
-	TelegramBot,
-	TelegramExecutionContext,
-	Webhook,
-	TelegramApi,
-	HistoryManager,
-	getBalance,
-	markdownToHtml,
-	fetchTool,
-	TelegramCommand,
-	TelegramGuestMessage,
-	PartialTelegramUpdate,
-	TelegramInlineQueryType,
-} from '@codebam/cf-workers-telegram-bot';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { TelegramExecutionContext, TelegramApi, HistoryManager, markdownToHtml, fetchTool } from '@codebam/cf-workers-telegram-bot';
 
-// @ts-ignore
-import { WorkflowEntrypoint, WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
+// @ts-expect-error - cloudflare:workers is not available in the local environment
+import { WorkflowEntrypoint, WorkflowEvent } from 'cloudflare:workers';
 
 export interface Env {
 	CONVERSATION_HISTORY: KVNamespace;
@@ -24,7 +12,7 @@ export interface Env {
 }
 
 export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
-	async run(event: WorkflowEvent<any>, step: WorkflowStep): Promise<void> {
+	async run(event: WorkflowEvent<any>): Promise<void> {
 		const task = event.payload;
 		const env = this.env;
 
@@ -351,8 +339,6 @@ async function streamAiResponseToTelegram(
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
-		const bot = new TelegramBot(''); // Token not used for setWebhook in this context
-
 		if (request.method === 'POST') {
 			try {
 				const task = (await request.json()) as any;
