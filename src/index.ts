@@ -3,6 +3,7 @@ import {
 	HistoryManager,
 	fetchTool,
 	wikipediaTool,
+	createTavilySearchTool,
 	streamAiResponseToTelegram,
 	createMockTelegramExecutionContext,
 } from '@codebam/cf-workers-telegram-bot';
@@ -13,6 +14,7 @@ export interface Env {
 	CONVERSATION_HISTORY: KVNamespace;
 	R2: R2Bucket;
 	AI: Ai;
+	TAVILY_API_KEY: string;
 	AI_WORKFLOW: Workflow;
 }
 
@@ -82,10 +84,14 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 
 					const wrappedFetch = wrapTool(fetchTool);
 					const wrappedWikipedia = wrapTool(wikipediaTool);
+					
+					const tavilyTool = createTavilySearchTool(env.TAVILY_API_KEY);
+					const wrappedTavily = wrapTool(tavilyTool);
 
 					const responseContent = await streamAiResponseToTelegram(tctx, env.AI, config.modelId, config.messages, task, [
 						wrappedFetch,
 						wrappedWikipedia,
+						wrappedTavily,
 					]);
 
 					console.log('Step [Stream AI Response]: Succeeded. Generated response length:', responseContent?.length || 0);
