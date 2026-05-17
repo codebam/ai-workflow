@@ -41,19 +41,37 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 			}
 		});
 
-		let content: string | undefined;
+		let stepResult: { content: string; toolExecutions?: any[] };
 
 		try {
-			content = await step.do('Stream AI Response', async () => {
+			stepResult = await step.do('Stream AI Response', async () => {
 				console.log('Step [Stream AI Response]: Started execution for prompt:', task.prompt);
 				const tctx = createMockTelegramExecutionContext(task);
 				try {
+					const initialMessageCount = config.messages.length;
 					const responseContent = await streamAiResponseToTelegram(tctx, env.AI, config.modelId, config.messages, task, [
 						fetchTool,
 						searchTool,
 					]);
+
+					// Capture any tool calls and outputs added during run
+					const toolExecutions = [];
+					for (let i = initialMessageCount; i < config.messages.length; i++) {
+						const msg = config.messages[i];
+						if (msg.role === 'tool' || msg.tool_calls) {
+							toolExecutions.push(msg);
+						}
+					}
+
 					console.log('Step [Stream AI Response]: Succeeded. Generated response length:', responseContent?.length || 0);
-					return responseContent;
+					if (toolExecutions.length > 0) {
+						console.log('Step [Stream AI Response]: Captured tool executions:', JSON.stringify(toolExecutions));
+					}
+
+					return {
+						content: responseContent,
+						toolExecutions: toolExecutions.length > 0 ? toolExecutions : undefined,
+					};
 				} catch (error) {
 					console.error('Step [Stream AI Response]: Failed with error:', error);
 					throw error;
@@ -73,12 +91,12 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 			throw e; // Mark the workflow as failed
 		}
 
-		if (task.userId && content) {
+		if (task.userId && stepResult.content) {
 			await step.do('Save Conversation History', async () => {
 				console.log('Step [Save Conversation History]: Started for user:', task.userId);
 				try {
 					const historyManager = new HistoryManager(env.CONVERSATION_HISTORY);
-					await historyManager.addMessage(task.userId, task.prompt, content!, task.threadId);
+					await historyManager.addMessage(task.userId, task.prompt, stepResult.content, task.threadId);
 					console.log('Step [Save Conversation History]: Succeeded.');
 				} catch (error) {
 					console.error('Step [Save Conversation History]: Failed with error:', error);
@@ -86,7 +104,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 				}
 			});
 		} else {
-			console.log('[Workflow] Save Conversation History step skipped. userId:', task.userId, 'hasContent:', !!content);
+			console.log('[Workflow] Save Conversation History step skipped. userId:', task.userId, 'hasContent:', !!stepResult.content);
 		}
 
 		console.log('[Workflow] AIWorkflow execution completed successfully.');
