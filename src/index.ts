@@ -2,6 +2,7 @@
 import {
 	HistoryManager,
 	fetchTool,
+	searchTool,
 	streamAiResponseToTelegram,
 	createMockTelegramExecutionContext,
 } from '@codebam/cf-workers-telegram-bot';
@@ -31,7 +32,7 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 		const modelId = task.modelId || '@cf/meta/llama-3.1-8b-instruct-fp8';
 
 		try {
-			const content = await streamAiResponseToTelegram(tctx, env.AI, modelId, messages, task, [fetchTool]);
+			const content = await streamAiResponseToTelegram(tctx, env.AI, modelId, messages, task, [fetchTool, searchTool]);
 			if (task.userId && content) {
 				const historyManager = new HistoryManager(env.CONVERSATION_HISTORY);
 				await historyManager.addMessage(task.userId, task.prompt, content, task.threadId);
