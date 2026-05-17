@@ -2,7 +2,7 @@
 import {
 	HistoryManager,
 	fetchTool,
-	searchTool,
+	wikipediaTool,
 	streamAiResponseToTelegram,
 	createMockTelegramExecutionContext,
 } from '@codebam/cf-workers-telegram-bot';
@@ -81,11 +81,11 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 					};
 
 					const wrappedFetch = wrapTool(fetchTool);
-					const wrappedSearch = wrapTool(searchTool);
+					const wrappedWikipedia = wrapTool(wikipediaTool);
 
 					const responseContent = await streamAiResponseToTelegram(tctx, env.AI, config.modelId, config.messages, task, [
 						wrappedFetch,
-						wrappedSearch,
+						wrappedWikipedia,
 					]);
 
 					console.log('Step [Stream AI Response]: Succeeded. Generated response length:', responseContent?.length || 0);
