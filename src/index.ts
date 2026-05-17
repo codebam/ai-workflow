@@ -48,20 +48,45 @@ export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
 				console.log('Step [Stream AI Response]: Started execution for prompt:', task.prompt);
 				const tctx = createMockTelegramExecutionContext(task);
 				try {
-					const initialMessageCount = config.messages.length;
-					const responseContent = await streamAiResponseToTelegram(tctx, env.AI, config.modelId, config.messages, task, [
-						fetchTool,
-						searchTool,
-					]);
+					const toolExecutions: any[] = [];
 
-					// Capture any tool calls and outputs added during run
-					const toolExecutions = [];
-					for (let i = initialMessageCount; i < config.messages.length; i++) {
-						const msg = config.messages[i];
-						if (msg.role === 'tool' || msg.tool_calls) {
-							toolExecutions.push(msg);
-						}
-					}
+					const wrapTool = (originalTool: any) => {
+						return {
+							...originalTool,
+							function: async (args: any) => {
+								console.log(`[Tool Call] Executing ${originalTool.name} with args:`, JSON.stringify(args));
+								try {
+									const result = await originalTool.function(args);
+									const resultStr = String(result);
+									toolExecutions.push({
+										tool: originalTool.name,
+										arguments: args,
+										status: 'success',
+										output: resultStr.length > 1000 ? resultStr.slice(0, 1000) + '... (truncated)' : resultStr,
+									});
+									console.log(`[Tool Call] ${originalTool.name} completed successfully.`);
+									return result;
+								} catch (error) {
+									toolExecutions.push({
+										tool: originalTool.name,
+										arguments: args,
+										status: 'error',
+										error: String(error),
+									});
+									console.error(`[Tool Call] ${originalTool.name} failed with error:`, error);
+									throw error;
+								}
+							},
+						};
+					};
+
+					const wrappedFetch = wrapTool(fetchTool);
+					const wrappedSearch = wrapTool(searchTool);
+
+					const responseContent = await streamAiResponseToTelegram(tctx, env.AI, config.modelId, config.messages, task, [
+						wrappedFetch,
+						wrappedSearch,
+					]);
 
 					console.log('Step [Stream AI Response]: Succeeded. Generated response length:', responseContent?.length || 0);
 					if (toolExecutions.length > 0) {
