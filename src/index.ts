@@ -7,7 +7,7 @@ import {
 	createMockTelegramExecutionContext,
 } from '@codebam/cf-workers-telegram-bot';
 
-import { WorkflowEntrypoint, WorkflowEvent } from 'cloudflare:workers';
+import { WorkflowEntrypoint, WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 
 export interface Env {
 	CONVERSATION_HISTORY: KVNamespace;
@@ -17,37 +17,79 @@ export interface Env {
 }
 
 export class AIWorkflow extends WorkflowEntrypoint<Env, any> {
-	async run(event: WorkflowEvent<any>): Promise<void> {
+	async run(event: WorkflowEvent<any>, step: WorkflowStep): Promise<void> {
 		const task = event.payload;
 		const env = this.env;
 
-		const tctx = createMockTelegramExecutionContext(task);
+		console.log('[Workflow] AIWorkflow execution started. Payload:', JSON.stringify(task));
 
-		const messages = [
-			{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
-			...(task.history || []),
-			{ role: 'user', content: task.prompt },
-		];
+		const config = await step.do('Initialize Context', async () => {
+			console.log('Step [Initialize Context]: Started.');
+			try {
+				const messages = [
+					{ role: 'system', content: task.systemPrompt || 'You are a helpful assistant.' },
+					...(task.history || []),
+					{ role: 'user', content: task.prompt },
+				];
+				const modelId = task.modelId || '@cf/meta/llama-3.1-8b-instruct-fp8';
+				const output = { messages, modelId };
+				console.log('Step [Initialize Context]: Succeeded. Config:', JSON.stringify(output));
+				return output;
+			} catch (error) {
+				console.error('Step [Initialize Context]: Failed with error:', error);
+				throw error;
+			}
+		});
 
-		const modelId = task.modelId || '@cf/meta/llama-3.1-8b-instruct-fp8';
+		let content: string | undefined;
 
 		try {
-			const content = await streamAiResponseToTelegram(tctx, env.AI, modelId, messages, task, [fetchTool, searchTool]);
-			if (task.userId && content) {
-				const historyManager = new HistoryManager(env.CONVERSATION_HISTORY);
-				await historyManager.addMessage(task.userId, task.prompt, content, task.threadId);
-			}
+			content = await step.do('Stream AI Response', async () => {
+				console.log('Step [Stream AI Response]: Started execution for prompt:', task.prompt);
+				const tctx = createMockTelegramExecutionContext(task);
+				try {
+					const responseContent = await streamAiResponseToTelegram(tctx, env.AI, config.modelId, config.messages, task, [
+						fetchTool,
+						searchTool,
+					]);
+					console.log('Step [Stream AI Response]: Succeeded. Generated response length:', responseContent?.length || 0);
+					return responseContent;
+				} catch (error) {
+					console.error('Step [Stream AI Response]: Failed with error:', error);
+					throw error;
+				}
+			});
 		} catch (e) {
-			console.error('Error in workflow execution:', e);
+			console.error('[Workflow] Error during streaming step execution:', e);
 			try {
+				const tctx = createMockTelegramExecutionContext(task);
 				const errorMsg = 'Error: ' + String(e);
 				if (errorMsg.trim()) {
 					await tctx.reply(errorMsg);
 				}
 			} catch (replyError) {
-				console.error('Failed to send error reply to Telegram:', replyError);
+				console.error('[Workflow] Failed to send error notification to Telegram:', replyError);
 			}
+			throw e; // Mark the workflow as failed
 		}
+
+		if (task.userId && content) {
+			await step.do('Save Conversation History', async () => {
+				console.log('Step [Save Conversation History]: Started for user:', task.userId);
+				try {
+					const historyManager = new HistoryManager(env.CONVERSATION_HISTORY);
+					await historyManager.addMessage(task.userId, task.prompt, content!, task.threadId);
+					console.log('Step [Save Conversation History]: Succeeded.');
+				} catch (error) {
+					console.error('Step [Save Conversation History]: Failed with error:', error);
+					throw error;
+				}
+			});
+		} else {
+			console.log('[Workflow] Save Conversation History step skipped. userId:', task.userId, 'hasContent:', !!content);
+		}
+
+		console.log('[Workflow] AIWorkflow execution completed successfully.');
 	}
 }
 
